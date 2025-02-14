@@ -43,7 +43,7 @@ def SoteDiffusionV3PatchEmbed2D(latents: torch.Tensor, sigmas: torch.Tensor, pat
         )
     )
 
-    batch_size, seq_len, channels = patched_latents.shape
+    batch_size, seq_len, _ = patched_latents.shape
 
     posed_embeds = torch.ones((batch_size, seq_len, 4), device=latents.device, dtype=latents.dtype)
     posed_embeds[:, :, 0] = torch.linspace(start=0, end=1, steps=seq_len, device=latents.device, dtype=latents.dtype)

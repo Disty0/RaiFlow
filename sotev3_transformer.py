@@ -226,7 +226,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     attention_head_dim=self.config.attention_head_dim,
                     qk_norm=qk_norm,
                 )
-                for i in range(self.config.num_layers)
+                for _ in range(self.config.num_layers)
             ]
         )
 
@@ -238,7 +238,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     attention_head_dim=self.config.attention_head_dim,
                     qk_norm=qk_norm,
                 )
-                for i in range(self.config.num_single_layers)
+                for _ in range(self.config.num_single_layers)
             ]
         )
 

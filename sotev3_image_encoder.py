@@ -47,7 +47,7 @@ def encode_single_channel_dct_2d(img: torch.Tensor, block_size: int=16, norm: st
     for h in range(h_blocks):
         for w in range(w_blocks):
             dct_tensor[:, h,w] = img[:, h*block_size:(h+1)*block_size, w*block_size:(w+1)*block_size]
-    dct_tensor = dct_2d(dct_tensor).reshape(batch_size, h_blocks, w_blocks, block_size*block_size)
+    dct_tensor = dct_2d(dct_tensor, norm=norm).reshape(batch_size, h_blocks, w_blocks, block_size*block_size)
     dct_tensor = dct_tensor.transpose(3,1).transpose(2,3)
 
     return dct_tensor
@@ -63,7 +63,7 @@ def decode_single_channel_dct_2d(img: torch.Tensor, norm: str='ortho') -> torch.
     for h in range(h_blocks):
         for w in range(w_blocks):
             idct_tensor[:, h:h+1, w:w+1] = img[:, :,h,w].reshape(batch_size, 1, 1, block_size, block_size)
-    idct_tensor = idct_2d(idct_tensor)
+    idct_tensor = idct_2d(idct_tensor, norm=norm)
     
     img_tensor = torch.zeros((batch_size, height, width), device=img.device, dtype=torch.float32)
     for h in range(h_blocks):
@@ -75,7 +75,7 @@ def decode_single_channel_dct_2d(img: torch.Tensor, norm: str='ortho') -> torch.
 
 def encode_jpeg_tensor(img: torch.Tensor, block_size: int=16, cbcr_downscale: int=2, norm: str='ortho') -> torch.Tensor:
     img = img[:, :, :(img.shape[-2]//block_size)*block_size, :(img.shape[-1]//block_size)*block_size] # crop to a multiply of block_size
-    _, channels, height, width = img.shape
+    _, _, height, width = img.shape
     downsample = torchvision.transforms.Resize((height//cbcr_downscale, width//cbcr_downscale), interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
     down_img = downsample(img[:, 1:,:,:])
     y = encode_single_channel_dct_2d(img[:, 0, :,:], block_size=block_size, norm=norm)
@@ -85,7 +85,7 @@ def encode_jpeg_tensor(img: torch.Tensor, block_size: int=16, cbcr_downscale: in
 
 
 def decode_jpeg_tensor(jpeg_img: torch.Tensor, block_size: int=16, cbcr_downscale: int=2, norm: str='ortho') -> torch.Tensor:
-    batch_size, _, h_blocks, w_blocks = jpeg_img.shape
+    _, _, h_blocks, w_blocks = jpeg_img.shape
     y_block_size = block_size*block_size
     cbcr_block_size = int((block_size//cbcr_downscale)*(block_size//cbcr_downscale))
     y = jpeg_img[:, :y_block_size]
