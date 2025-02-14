@@ -460,7 +460,8 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         # x0_pred to flowmatch
         if return_noise_pred:
             sigmas = sigmas.view(batch_size,1,1,1)
-            output = ((noisy_input - (x0_pred * (1-sigmas))) / sigmas) - x0_pred
+            noise_pred = ((noisy_input - (x0_pred * (1-sigmas))) / sigmas) - x0_pred
+            output = [x0_pred, noise_pred]
         else:
             output = x0_pred
 
