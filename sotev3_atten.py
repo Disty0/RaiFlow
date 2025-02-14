@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 
-from .diffusers_aten import Attention
+from diffusers.models.attention_processor import Attention
 
 
 class SoteDiffusionV3AttnProcessor2_0:
