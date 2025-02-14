@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Copied and edited from diffusers.
 # SoteV3 modifications: Add qk_norm="layer_norm"
 
 import inspect

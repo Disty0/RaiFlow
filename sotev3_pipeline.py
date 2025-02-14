@@ -7,16 +7,13 @@ from transformers import (
     Qwen2_5_VLProcessor,
 )
 
-from diffusers.image_processor import PipelineImageInput #, VaeImageProcessor
-#from diffusers.models.autoencoders import AutoencoderKL
+from diffusers.image_processor import PipelineImageInput
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils import (
     is_torch_xla_available,
     logging,
     replace_example_docstring,
 )
-
-#from PIL import Image
 
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
@@ -171,9 +168,6 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             else 128
         )
         self.patch_size = self.transformer.config.patch_size if hasattr(self, "transformer") and self.transformer is not None else 1
-        #self.patch_size = (
-        #    max(self.transformer.config.patch_size, self.transformer.config.secondary_patch_size) if hasattr(self, "transformer") and self.transformer is not None else 2
-        #)
 
     def _get_qwen2_prompt_embeds(
             self,
@@ -669,8 +663,6 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     x0_pred_uncond, x0_pred_text = x0_pred.chunk(2)
 
-                    #noise_pred = (noise_pred_text * self.guidance_scale) - (noise_pred_uncond * (self.guidance_scale - 1))
-
                     if t == self.transformer.config.num_timesteps and self.sotediffusion_guidence_base_shift != 0.0:
                         # downscale cfg at the first step to fix everything becoming black issue
                         downscaled_guidance_scale = (self.guidance_scale / 2) / (self.sotediffusion_guidence_base_shift / self.scheduler.shift)
@@ -690,10 +682,6 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     x0_pred_text_cfg = (x0_pred_text * downscaled_guidance_scale) - (x0_pred_uncond * (downscaled_guidance_scale - 1))
                     x0_pred_uncond_cfg = (x0_pred_uncond * downscaled_guidance_scale) - (x0_pred_text * (downscaled_guidance_scale - 1))
                     current_sigma = t.to(x0_pred_text_cfg.dtype) / self.transformer.config.num_timesteps
-
-                    #current_sigma = self.scheduler.sigmas[self.scheduler.step_index or i]
-                    #x0_pred_text_cfg = latents - (noise_pred_text_cfg * current_sigma)
-                    #x0_pred_uncond_cfg = latents - (noise_pred_uncond_cfg * current_sigma)
 
                     noise_pred = noise_pred_text_cfg - x0_pred_guidance_scale * ((x0_pred_text_cfg - x0_pred_uncond_cfg) * current_sigma)
 

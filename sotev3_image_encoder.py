@@ -74,7 +74,7 @@ def decode_single_channel_dct_2d(img: torch.Tensor, norm: str='ortho') -> torch.
 
 
 def encode_jpeg_tensor(img: torch.Tensor, block_size: int=16, cbcr_downscale: int=2, norm: str='ortho') -> torch.Tensor:
-    img = img[:, :, :(img.shape[-2]//block_size)*block_size, :(img.shape[-1]//block_size)*block_size] # crop to multiply of block_size
+    img = img[:, :, :(img.shape[-2]//block_size)*block_size, :(img.shape[-1]//block_size)*block_size] # crop to a multiply of block_size
     _, channels, height, width = img.shape
     downsample = torchvision.transforms.Resize((height//cbcr_downscale, width//cbcr_downscale), interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
     down_img = downsample(img[:, 1:,:,:])

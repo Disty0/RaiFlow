@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 
-#from diffusers.models.attention_processor import Attention
 from .diffusers_aten import Attention
 
 
@@ -99,7 +98,7 @@ class SoteDiffusionV3AttnProcessor2_0:
 
 
 class SoteDiffusionV3CrossAttnProcessor2_0:
-    """Attention processor used in processing the Sote Diffusion V3 self-attention projections."""
+    """Attention processor used in processing the Sote Diffusion V3 cross-attention projections."""
 
     def __init__(self):
         if not hasattr(F, "scaled_dot_product_attention"):
