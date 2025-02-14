@@ -22,7 +22,7 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 @maybe_allow_in_graph
 class SoteDiffusionV3SingleTransformerBlock(nn.Module):
     r"""
-    A Single Transformer block as part of the Sote Diffusion V3 MMxDiT architecture.
+    A Single Transformer block as part of the Sote Diffusion V3 MMDiT architecture.
 
     Parameters:
         dim (`int`): The number of channels in the input and output.
@@ -90,7 +90,7 @@ class SoteDiffusionV3SingleTransformerBlock(nn.Module):
 @maybe_allow_in_graph
 class SoteDiffusionV3JointTransformerBlock(nn.Module):
     r"""
-     A Joint Transformer block as part of the Sote Diffusion V3 MMxDiT architecture.
+     A Joint Transformer block as part of the Sote Diffusion V3 MMDiT architecture.
 
     Parameters:
         dim (`int`): The number of channels in the input and output.
@@ -364,7 +364,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
 
         Args:
             hidden_states (`torch.FloatTensor` of shape `(batch_size, dim, height, width)`):
-                Input `hidden_states`.
+                JPEG latent input.
             encoder_hidden_states (`torch.FloatTensor` of shape `(batch size, sequence_len, embed_dims)`):
                 Conditional embeddings (embeddings computed from the input conditions such as prompts) to use.
             timestep (`torch.LongTensor`):
@@ -381,7 +381,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 Whether or not to return a [`~models.transformer_2d.Transformer2DModelOutput`] instead of a plain
                 tuple.
             return_noise_pred (`bool`, *optional*, defaults to `False`):
-                Whether or not to return floematch noise pred or x0 pred.
+                Whether or not to return the calculated flowmatch noise pred alongside the model's x0 pred.
 
         Returns:
             If `return_dict` is True, an [`~models.transformer_2d.Transformer2DModelOutput`] is returned, otherwise a
