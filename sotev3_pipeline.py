@@ -663,7 +663,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     x0_pred_uncond, x0_pred_text = x0_pred.chunk(2)
 
-                    if t == self.transformer.config.num_timesteps and self.sotediffusion_guidence_base_shift != 0.0:
+                    if t == self.transformer.config.num_timesteps and self.sotediffusion_guidence_base_shift > 0:
                         # downscale cfg at the first step to fix everything becoming black issue
                         downscaled_guidance_scale = (self.guidance_scale / 2) / (self.sotediffusion_guidence_base_shift / self.scheduler.shift)
                     else:
