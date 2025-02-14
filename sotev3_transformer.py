@@ -104,7 +104,6 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
         num_attention_heads: int,
         attention_head_dim: int,
         qk_norm: Optional[str] = None,
-        norm: Optional[str] = None,
     ):
         super().__init__()
 
@@ -207,7 +206,6 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         num_timesteps: int = 1000,
         out_channels: int = None,
         qk_norm: Optional[str] = None,
-        norm: Optional[str] = None,
     ):
         super().__init__()
         self.out_channels = out_channels if out_channels is not None else in_channels

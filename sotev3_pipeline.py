@@ -320,8 +320,6 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         negative_prompt_images=None,
         prompt_embeds=None,
         negative_prompt_embeds=None,
-        pooled_prompt_embeds=None,
-        negative_pooled_prompt_embeds=None,
         callback_on_step_end_tensor_inputs=None,
         max_sequence_length=None,
     ):
@@ -560,7 +558,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         self._guidance_scale = guidance_scale
         self._sotediffusion_guidence_base_shift = sotediffusion_guidence_base_shift
         self._sotediffusion_x0_pred_guidance_scale = sotediffusion_x0_pred_guidance_scale
-        
+
         self._joint_attention_kwargs = joint_attention_kwargs
         self._interrupt = False
 
@@ -574,9 +572,6 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
 
         device = self._execution_device
 
-        lora_scale = (
-            self.joint_attention_kwargs.get("scale", None) if self.joint_attention_kwargs is not None else None
-        )
         (
             prompt_embeds,
             negative_prompt_embeds,
@@ -672,18 +667,16 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
 
                     if downscaled_guidance_scale > 1:
                         noise_pred_text_cfg = (noise_pred_text * downscaled_guidance_scale) - (noise_pred_uncond * (downscaled_guidance_scale - 1))
-                        noise_pred_uncond_cfg = (noise_pred_uncond * downscaled_guidance_scale) - (noise_pred_text * (downscaled_guidance_scale - 1))
                         x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale
                     else:
                         noise_pred_text_cfg = noise_pred_text
-                        noise_pred_uncond_cfg = noise_pred_uncond
                         x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale + self.guidance_scale
 
                     x0_pred_text_cfg = (x0_pred_text * downscaled_guidance_scale) - (x0_pred_uncond * (downscaled_guidance_scale - 1))
                     x0_pred_uncond_cfg = (x0_pred_uncond * downscaled_guidance_scale) - (x0_pred_text * (downscaled_guidance_scale - 1))
                     current_sigma = t.to(x0_pred_text_cfg.dtype) / self.transformer.config.num_timesteps
 
-                    noise_pred = noise_pred_text_cfg - x0_pred_guidance_scale * ((x0_pred_text_cfg - x0_pred_uncond_cfg) * current_sigma)
+                    noise_pred = noise_pred_text_cfg - (x0_pred_guidance_scale * ((x0_pred_text_cfg - x0_pred_uncond_cfg) * current_sigma))
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype

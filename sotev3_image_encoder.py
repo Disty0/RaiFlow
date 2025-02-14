@@ -29,7 +29,7 @@ def ycbcr_tensor_to_rgb(ycbcr: torch.Tensor) -> torch.Tensor:
     y = ycbcr_img[:,0,:,:]
     cb = ycbcr_img[:,1,:,:] - (128/255)
     cr = ycbcr_img[:,2,:,:] - (128/255)
-    
+
     r = y + (cr * 1.402525)
     g = y + (cb * -0.343730) + (cr * -0.714401)
     b = y + (cb * 1.769905) + (cr * 0.000013)
@@ -64,7 +64,7 @@ def decode_single_channel_dct_2d(img: torch.Tensor, norm: str='ortho') -> torch.
         for w in range(w_blocks):
             idct_tensor[:, h:h+1, w:w+1] = img[:, :,h,w].reshape(batch_size, 1, 1, block_size, block_size)
     idct_tensor = idct_2d(idct_tensor, norm=norm)
-    
+
     img_tensor = torch.zeros((batch_size, height, width), device=img.device, dtype=torch.float32)
     for h in range(h_blocks):
         for w in range(w_blocks):
