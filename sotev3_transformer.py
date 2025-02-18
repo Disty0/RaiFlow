@@ -195,15 +195,16 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
     @register_to_config
     def __init__(
         self,
-        sample_size: int = 128,
-        patch_size: int = 2,
-        in_channels: int = 16,
+        sample_size: int = 64,
+        patch_size: int = 1,
+        in_channels: int = 384,
         num_layers: int = 8,
-        num_single_layers: int = 4,
+        num_single_layers: int = 32,
         attention_head_dim: int = 64,
-        num_attention_heads: int = 48,
-        encoder_in_channels: int = 4096,
-        num_timesteps: int = 1000,
+        num_attention_heads: int = 32,
+        encoder_in_channels: int = 1536,
+        encoder_base_seq_len: int = 1024,
+        num_train_timesteps: int = 1000,
         out_channels: int = None,
         qk_norm: Optional[str] = None,
     ):
@@ -404,14 +405,14 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
 
         if return_noise_pred:
             noisy_input = hidden_states.clone()
-        sigmas = timestep.view(batch_size,1).to(dtype=hidden_states.dtype) / self.config.num_timesteps
+        sigmas = timestep.view(batch_size,1).to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
 
         hidden_states = SoteDiffusionV3PosEmbed2D(hidden_states)
-        hidden_states = SoteDiffusionV3PatchEmbed2D(latents=hidden_states, sigmas=sigmas, patch_size=self.config.patch_size, embeds_seq_len=encoder_hidden_states.shape[1])
+        hidden_states = SoteDiffusionV3PatchEmbed2D(latents=hidden_states, sigmas=sigmas, patch_size=self.config.patch_size, embeds_seq_len=encoder_hidden_states.shape[1], base_seq_len=(self.config.sample_size*self.config.sample_size))
         hidden_states = self.embedder(hidden_states).clamp(-16384,16384)
 
         encoder_hidden_states = self.context_embedder_norm(encoder_hidden_states)
-        encoder_hidden_states = SoteDiffusionV3PosEmbed1D(embeds=encoder_hidden_states, sigmas=sigmas, latents_seq_len=hidden_states.shape[1])
+        encoder_hidden_states = SoteDiffusionV3PosEmbed1D(embeds=encoder_hidden_states, sigmas=sigmas, latents_seq_len=hidden_states.shape[1], base_seq_len=self.config.encoder_base_seq_len)
         encoder_hidden_states = self.context_embedder(encoder_hidden_states).clamp(-16384,16384)
 
         for index_block, block in enumerate(self.transformer_blocks):

@@ -3,8 +3,8 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
 from transformers import (
-    Qwen2_5_VLForConditionalGeneration,
-    Qwen2_5_VLProcessor,
+    Qwen2VLForConditionalGeneration,
+    Qwen2VLProcessor,
 )
 
 from diffusers.image_processor import PipelineImageInput
@@ -15,9 +15,9 @@ from diffusers.utils import (
     replace_example_docstring,
 )
 
-from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
+from .sotev3_torch_utils import uniform_tensor
 from .sotev3_transformer import SoteDiffusionV3Transformer2DModel
 from .sotev3_image_encoder import SoteV3ImageEncoder
 from .sotev3_pipeline_output import SoteDiffusionV3PipelineOutput
@@ -133,12 +133,12 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
         image_encoder ([`SoteV3ImageEncoder`]):
             Sote Diffusion V3 JPEG encoder to encode and decode images to and from latent representations.
-        text_encoder ([`Qwen2_5_VLForConditionalGeneration`]):
-            [Qwen2_5_VLForConditionalGeneration](https://huggingface.co/docs/transformers/main/model_doc/qwen2_5_vl),
-            specifically the [3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct) variant.
-        tokenizer (`Qwen2_5_VLProcessor`):
+        text_encoder ([`Qwen2VLForConditionalGeneration`]):
+            [Qwen2VLForConditionalGeneration](https://huggingface.co/docs/transformers/main/model_doc/qwen2_vl#transformers.Qwen2VLForConditionalGeneration),
+            specifically the [2B](https://huggingface.co/Qwen/Qwen2-VL-2B) variant.
+        tokenizer (`Qwen2VLProcessor`):
             Tokenizer of class
-            [Qwen2_5_VLProcessor](https://huggingface.co/docs/transformers/main/model_doc/qwen2_5_vl#transformers.Qwen2_5_VLProcessor).
+            [Qwen2VLProcessor](https://huggingface.co/docs/transformers/main/model_doc/qwen2_vl#transformers.Qwen2VLProcessor).
     """
 
     model_cpu_offload_seq = "text_encoder->transformer"
@@ -149,8 +149,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         transformer: SoteDiffusionV3Transformer2DModel,
         scheduler: FlowMatchEulerDiscreteScheduler,
         image_encoder: SoteV3ImageEncoder,
-        text_encoder: Qwen2_5_VLForConditionalGeneration,
-        tokenizer: Qwen2_5_VLProcessor,
+        text_encoder: Qwen2VLForConditionalGeneration,
+        tokenizer: Qwen2VLProcessor,
     ):
         super().__init__()
 
@@ -173,8 +173,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             self,
             prompt: Union[str, List[str]] = None,
             prompt_images: Optional[PipelineImageInput] = None,
-            num_images_per_prompt: int = 1,
-            max_sequence_length: int = 512,
+            max_sequence_length: int = 1024,
             device: Optional[torch.device] = None,
             dtype: Optional[torch.dtype] = None,
         ):
@@ -182,7 +181,6 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             dtype = dtype or self.text_encoder.dtype
 
             prompt = [prompt] if isinstance(prompt, str) else prompt
-            batch_size = len(prompt)
 
             if prompt_images is not None and not isinstance(prompt_images, list):
                 prompt_images = [prompt_images]
@@ -213,14 +211,17 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
 
             attention_mask = inputs["attention_mask"].to(device, dtype=dtype)
             prompt_embeds = prompt_embeds * attention_mask.unsqueeze(-1).expand(prompt_embeds.shape)
+            prompt_embeds_list = []
+            for i in range(prompt_embeds.size(0)):
+                count = 0
+                for j in reversed(attention_mask[i]):
+                    if j == 0:
+                        break
+                    count += 1
+                count = max(count,1)
+                prompt_embeds_list.append(prompt_embeds[i, -count:])
 
-            _, seq_len, _ = prompt_embeds.shape
-
-            # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
-            prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-            prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
-
-            return prompt_embeds
+            return prompt_embeds_list
 
     def encode_prompt(
         self,
@@ -233,7 +234,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         negative_prompt_images: Optional[PipelineImageInput] = None,
         prompt_embeds: Optional[torch.FloatTensor] = None,
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
-        max_sequence_length: int = 512,
+        max_sequence_length: int = 1024,
+        min_sequence_length: int = 128,
     ):
         r"""
 
@@ -277,10 +279,39 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             prompt_embeds = self._get_qwen2_prompt_embeds(
                 prompt=prompt,
                 prompt_images=prompt_images,
-                num_images_per_prompt=num_images_per_prompt,
                 max_sequence_length=max_sequence_length,
                 device=device,
             )
+
+            # Offload all models if negative embeds are provided
+            if negative_prompt_embeds is not None:
+                self.maybe_free_model_hooks()
+
+            max_len = 0
+            for embed in prompt_embeds:
+                max_len = max(max_len, embed.shape[0])
+            max_len = max(max_len, min_sequence_length)
+            if max_len % 64 != 0: # make it a multiple of 64
+                max_len +=  64 - (max_len % 64)
+
+            embed_dim = prompt_embeds[0].shape[-1]
+            for i in range(len(prompt_embeds)):
+                seq_len = prompt_embeds[i].shape[0]
+                if seq_len != max_len:
+                    prompt_embeds[i] = torch.cat(
+                        [
+                            prompt_embeds[i],
+                            torch.zeros((max_len-seq_len, embed_dim), device=prompt_embeds[i].device, dtype=prompt_embeds[i].dtype)
+                        ],
+                        dim=0,
+                    )
+
+            prompt_embeds = torch.stack(prompt_embeds, dim=0)
+
+            _, seq_len, _ = prompt_embeds.shape
+            # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
+            prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
+            prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
 
         if do_classifier_free_guidance and negative_prompt_embeds is None:
             negative_prompt = negative_prompt or ""
@@ -303,10 +334,48 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             negative_prompt_embeds = self._get_qwen2_prompt_embeds(
                 prompt=negative_prompt,
                 prompt_images=negative_prompt_images,
-                num_images_per_prompt=num_images_per_prompt,
                 max_sequence_length=max_sequence_length,
                 device=device,
             )
+
+            # Offload all models
+            self.maybe_free_model_hooks()
+
+            max_len = 0
+            for embed in negative_prompt_embeds:
+                max_len = max(max_len, embed.shape[0])
+            max_len = max(max_len, prompt_embeds.shape[1])
+            if max_len % 64 != 0: # make it a multiple of 64
+                max_len +=  64 - (max_len % 64)
+
+            embed_dim = negative_prompt_embeds[0].shape[-1]
+            for i in range(len(negative_prompt_embeds)):
+                seq_len = negative_prompt_embeds[i].shape[0]
+                if seq_len != max_len:
+                    negative_prompt_embeds[i] = torch.cat(
+                        [
+                            negative_prompt_embeds[i],
+                            torch.zeros((max_len-seq_len, embed_dim), device=negative_prompt_embeds[i].device, dtype=negative_prompt_embeds[i].dtype)
+                        ],
+                        dim=0,
+                    )
+
+            negative_prompt_embeds = torch.stack(negative_prompt_embeds, dim=0)
+
+            _, seq_len, _ = negative_prompt_embeds.shape
+            # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
+            negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
+            negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+
+            if negative_prompt_embeds.shape[1] > prompt_embeds.shape[1]:
+                batch_size, seq_len, embed_dim = prompt_embeds.shape
+                prompt_embeds = torch.cat(
+                        [
+                            prompt_embeds,
+                            torch.zeros((batch_size, negative_prompt_embeds.shape[1]-seq_len, embed_dim), device=prompt_embeds[i].device, dtype=prompt_embeds[i].dtype)
+                        ],
+                        dim=1,
+                    )
 
         return prompt_embeds, negative_prompt_embeds
 
@@ -322,6 +391,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         negative_prompt_embeds=None,
         callback_on_step_end_tensor_inputs=None,
         max_sequence_length=None,
+        min_sequence_length=None,
     ):
         if (
             height % (self.image_encoder.config.block_size * self.patch_size) != 0
@@ -365,6 +435,16 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     f" {negative_prompt_embeds.shape}."
                 )
 
+        if max_sequence_length is not None and not isinstance(max_sequence_length, int):
+            raise ValueError(
+                f"`max_sequence_length` must be an integer but got: {type(max_sequence_length)}"
+            )
+
+        if min_sequence_length is not None and not isinstance(min_sequence_length, int):
+            raise ValueError(
+                f"`min_sequence_length` must be an integer but got: {type(min_sequence_length)}"
+            )
+
     def prepare_latents(
         self,
         batch_size,
@@ -379,12 +459,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         if latents is not None:
             return latents.to(device=device, dtype=dtype)
 
-        shape = (
-            batch_size,
-            num_channels_latents,
-            int(height) // self.image_encoder.config.block_size,
-            int(width) // self.image_encoder.config.block_size,
-        )
+        shape = (batch_size, int(height), int(width), 3)
 
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
@@ -392,7 +467,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+        latents = uniform_tensor(shape, min_value=0, max_value=(255+1e-4), generator=generator, device=device, dtype=torch.float32).clamp(0,255)
+        latents = self.image_encoder.encode(latents, device=device).to(device, dtype=dtype)
 
         return latents
 
@@ -452,7 +528,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
-        max_sequence_length: int = 512,
+        max_sequence_length: int = 1024,
+        min_sequence_length: int = 128,
         mu: Optional[float] = None,
     ):
         r"""
@@ -527,7 +604,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
                 will be passed as `callback_kwargs` argument. You will only be able to include variables listed in the
                 `._callback_tensor_inputs` attribute of your pipeline class.
-            max_sequence_length (`int` defaults to 512): Maximum sequence length to use with the `prompt`.
+            max_sequence_length (`int` defaults to 1024): Maximum sequence length to use with the `prompt`.
+            min_sequence_length (`int` defaults to 128): Minimum sequence length to use with the `prompt`.
             mu (`float`, *optional*): `mu` value used for `dynamic_shifting`.
 
         Examples:
@@ -553,6 +631,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             negative_prompt_embeds=negative_prompt_embeds,
             callback_on_step_end_tensor_inputs=callback_on_step_end_tensor_inputs,
             max_sequence_length=max_sequence_length,
+            min_sequence_length=min_sequence_length,
         )
 
         self._guidance_scale = guidance_scale
@@ -586,6 +665,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             device=device,
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_sequence_length,
+            min_sequence_length=min_sequence_length,
         )
 
         if self.do_classifier_free_guidance:

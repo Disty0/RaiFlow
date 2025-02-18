@@ -17,8 +17,8 @@ from sotev3.torch_dct import dct_2d, idct_2d
 def rgb_to_ycbcr_tensor(image: torch.Tensor) -> torch.Tensor:
     img = image.float() / 255
     y = (img[:,:,:,0] * 0.299) + (img[:,:,:,1] * 0.587) + (img[:,:,:,2] * 0.114)
-    cb = (128/255) + (img[:,:,:,0] * -0.168935) + (img[:,:,:,1] * -0.331665) + (img[:,:,:,2] * 0.50059)
-    cr = (128/255) + (img[:,:,:,0] * 0.499813) + (img[:,:,:,1] * -0.418531) + (img[:,:,:,2] * -0.081282)
+    cb = 0.5 + (img[:,:,:,0] * -0.168935) + (img[:,:,:,1] * -0.331665) + (img[:,:,:,2] * 0.50059)
+    cr = 0.5 + (img[:,:,:,0] * 0.499813) + (img[:,:,:,1] * -0.418531) + (img[:,:,:,2] * -0.081282)
     ycbcr = torch.stack([y,cb,cr], dim=1)
     ycbcr = (ycbcr - 0.5) * 2
     return ycbcr
@@ -27,8 +27,8 @@ def rgb_to_ycbcr_tensor(image: torch.Tensor) -> torch.Tensor:
 def ycbcr_tensor_to_rgb(ycbcr: torch.Tensor) -> torch.Tensor:
     ycbcr_img = (ycbcr / 2) + 0.5
     y = ycbcr_img[:,0,:,:]
-    cb = ycbcr_img[:,1,:,:] - (128/255)
-    cr = ycbcr_img[:,2,:,:] - (128/255)
+    cb = ycbcr_img[:,1,:,:] - 0.5
+    cr = ycbcr_img[:,2,:,:] - 0.5
 
     r = y + (cr * 1.402525)
     g = y + (cb * -0.343730) + (cr * -0.714401)
