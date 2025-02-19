@@ -73,8 +73,8 @@ class SoteDiffusionV3SingleTransformerBlock(nn.Module):
 
     def forward(self, hidden_states: torch.FloatTensor):
         attn_output = self.attn(hidden_states=hidden_states, encoder_hidden_states=None)
-        hidden_states = hidden_states + attn_output.clamp(-32768,32768)
-        hidden_states = hidden_states.clamp(-16384,16384)
+        hidden_states = hidden_states + attn_output.clamp(-16384,16384)
+        hidden_states = hidden_states.clamp(-8192,8192)
 
         if self._chunk_size is not None:
             # "feed_forward_chunk_size" can be used to save memory
@@ -82,8 +82,8 @@ class SoteDiffusionV3SingleTransformerBlock(nn.Module):
         else:
             ff_output = self.ff(hidden_states)
 
-        hidden_states = hidden_states + ff_output.clamp(-32768,32768)
-        hidden_states = hidden_states.clamp(-16384,16384)
+        hidden_states = hidden_states + ff_output.clamp(-16384,16384)
+        hidden_states = hidden_states.clamp(-8192,8192)
         return hidden_states
 
 
@@ -145,11 +145,11 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
         # Attention.
         attn_output, context_attn_output = self.attn(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
 
-        hidden_states = hidden_states + attn_output.clamp(-32768,32768)
-        hidden_states = hidden_states.clamp(-16384,16384)
+        hidden_states = hidden_states + attn_output.clamp(-16384,16384)
+        hidden_states = hidden_states.clamp(-8192,8192)
 
-        encoder_hidden_states = encoder_hidden_states + context_attn_output.clamp(-32768,32768)
-        encoder_hidden_states = encoder_hidden_states.clamp(-16384,16384)
+        encoder_hidden_states = encoder_hidden_states + context_attn_output.clamp(-16384,16384)
+        encoder_hidden_states = encoder_hidden_states.clamp(-8192,8192)
 
         if self._chunk_size is not None:
             # "feed_forward_chunk_size" can be used to save memory
@@ -157,8 +157,8 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
         else:
             ff_output = self.ff(hidden_states)
 
-        hidden_states = hidden_states + ff_output.clamp(-32768,32768)
-        hidden_states = hidden_states.clamp(-16384,16384)
+        hidden_states = hidden_states + ff_output.clamp(-16384,16384)
+        hidden_states = hidden_states.clamp(-8192,8192)
 
         if self._chunk_size is not None:
             # "feed_forward_chunk_size" can be used to save memory
@@ -166,8 +166,8 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
         else:
             ff_context_output = self.ff_context(encoder_hidden_states)
 
-        encoder_hidden_states = encoder_hidden_states + ff_context_output.clamp(-32768,32768)
-        encoder_hidden_states = encoder_hidden_states.clamp(-16384,16384)
+        encoder_hidden_states = encoder_hidden_states + ff_context_output.clamp(-16384,16384)
+        encoder_hidden_states = encoder_hidden_states.clamp(-8192,8192)
 
         return hidden_states, encoder_hidden_states
 
@@ -409,11 +409,11 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
 
         hidden_states = SoteDiffusionV3PosEmbed2D(hidden_states)
         hidden_states = SoteDiffusionV3PatchEmbed2D(latents=hidden_states, sigmas=sigmas, patch_size=self.config.patch_size, embeds_seq_len=encoder_hidden_states.shape[1], base_seq_len=(self.config.sample_size*self.config.sample_size))
-        hidden_states = self.embedder(hidden_states).clamp(-16384,16384)
+        hidden_states = self.embedder(hidden_states).clamp(-8192,8192)
 
         encoder_hidden_states = self.context_embedder_norm(encoder_hidden_states)
         encoder_hidden_states = SoteDiffusionV3PosEmbed1D(embeds=encoder_hidden_states, sigmas=sigmas, latents_seq_len=hidden_states.shape[1], base_seq_len=self.config.encoder_base_seq_len)
-        encoder_hidden_states = self.context_embedder(encoder_hidden_states).clamp(-16384,16384)
+        encoder_hidden_states = self.context_embedder(encoder_hidden_states).clamp(-8192,8192)
 
         for index_block, block in enumerate(self.transformer_blocks):
 
