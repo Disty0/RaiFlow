@@ -38,10 +38,10 @@ def SoteDiffusionV3PatchEmbed2D(latents: torch.Tensor, sigmas: torch.Tensor, pat
     patched_latents = latents.reshape(
         (
             batch_size,
+            int(in_channels*patch_size*patch_size),
             int((width/patch_size) * (height/patch_size)),
-            int(in_channels*patch_size*patch_size)
         )
-    )
+    ).transpose(1,2)
 
     batch_size, seq_len, _ = patched_latents.shape
 

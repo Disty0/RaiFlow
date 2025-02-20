@@ -454,7 +454,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :]
 
         hidden_states = self.unembedder(hidden_states)
-        x0_pred = hidden_states.reshape((batch_size, self.out_channels, height, width))
+        x0_pred = hidden_states.transpose(1,2).reshape((batch_size, self.out_channels, height, width))
 
         # x0_pred to flowmatch
         if return_noise_pred:
