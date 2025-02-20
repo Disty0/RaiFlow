@@ -13,21 +13,24 @@ from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.attention import FeedForward, _chunked_feed_forward
 from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
 
-from sotev3.sotev3_atten import SoteDiffusionV3AttnProcessor2_0
-from sotev3.sotev3_embedder import SoteDiffusionV3PosEmbed1D, SoteDiffusionV3PosEmbed2D, SoteDiffusionV3PatchEmbed2D
+from .sotev3_atten import SoteDiffusionV3AttnProcessor2_0, SoteDiffusionV3CrossAttnProcessor2_0
+from .sotev3_embedder import SoteDiffusionV3PosEmbed1D, SoteDiffusionV3PosEmbed2D
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 @maybe_allow_in_graph
-class SoteDiffusionV3SingleTransformerBlock(nn.Module):
+class SoteDiffusionV3LinearTransformer1DBlock(nn.Module):
     r"""
-    A Single Transformer block as part of the Sote Diffusion V3 MMDiT architecture.
+    A Linear 1D Transformer block as part of the Sote Diffusion V3 MMCDit architecture.
 
     Parameters:
         dim (`int`): The number of channels in the input and output.
         num_attention_heads (`int`): The number of heads to use for multi-head attention.
         attention_head_dim (`int`): The number of channels in each head.
+        ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the feed forward hidden dimension.
+        dropout (`float`, *optional*, defaults to 0.0): The dropout probability to use.
+        qk_norm (`str`, *optional*, defaults to none): The qk normalization to use in attention.
     """
 
     def __init__(
@@ -35,6 +38,84 @@ class SoteDiffusionV3SingleTransformerBlock(nn.Module):
         dim: int,
         num_attention_heads: int,
         attention_head_dim: int,
+        ff_mult: int = 4,
+        dropout: float = 0.0,
+        qk_norm: Optional[str] = None,
+    ):
+        super().__init__()
+
+        if hasattr(F, "scaled_dot_product_attention"):
+            processor = SoteDiffusionV3AttnProcessor2_0()
+        else:
+            raise ValueError(
+                "The current PyTorch version does not support the `scaled_dot_product_attention` function."
+            )
+
+        self.norm = nn.LayerNorm(dim, eps=1e-6, elementwise_affine=True)
+        self.attn = Attention(
+            query_dim=dim,
+            cross_attention_dim=None,
+            added_kv_proj_dim=None,
+            dim_head=attention_head_dim,
+            heads=num_attention_heads,
+            out_dim=dim,
+            bias=True,
+            processor=processor,
+            dropout=dropout,
+            qk_norm=qk_norm,
+            eps=1e-6,
+        )
+
+        self.norm2 = nn.LayerNorm(dim, eps=1e-6, elementwise_affine=True)
+        self.ff = FeedForward(dim=dim, dim_out=dim, mult=ff_mult, dropout=dropout, activation_fn="gelu-approximate", bias=True)
+
+        # let chunk size default to None
+        self._chunk_size = None
+        self._chunk_dim = 0
+
+    # Copied from diffusers.models.attention.BasicTransformerBlock.set_chunk_feed_forward
+    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 0):
+        # Sets chunk feed-forward
+        self._chunk_size = chunk_size
+        self._chunk_dim = dim
+
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None)
+        hidden_states = self.norm(hidden_states)
+
+        if self._chunk_size is not None:
+            # "feed_forward_chunk_size" can be used to save memory
+            ff_output = _chunked_feed_forward(self.ff, hidden_states, self._chunk_dim, self._chunk_size)
+        else:
+            ff_output = self.ff(hidden_states)
+
+        hidden_states = hidden_states + ff_output
+        hidden_states = self.norm2(hidden_states)
+
+        return hidden_states
+
+
+@maybe_allow_in_graph
+class SoteDiffusionV3ConvTransformer2DBlock(nn.Module):
+    r"""
+    A Conv 2D Transformer block as part of the Sote Diffusion V3 MMCDit architecture.
+
+    Parameters:
+        dim (`int`): The number of channels in the input and output.
+        num_attention_heads (`int`): The number of heads to use for multi-head attention.
+        attention_head_dim (`int`): The number of channels in each head.
+        ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the feed forward hidden dimension.
+        dropout (`float`, *optional*, defaults to 0.0): The dropout probability to use.
+        qk_norm (`str`, *optional*, defaults to none): The qk normalization to use in attention.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        num_attention_heads: int,
+        attention_head_dim: int,
+        ff_mult: int = 4,
+        dropout: float = 0.0,
         qk_norm: Optional[str] = None,
     ):
         super().__init__()
@@ -55,47 +136,45 @@ class SoteDiffusionV3SingleTransformerBlock(nn.Module):
             out_dim=dim,
             bias=True,
             processor=processor,
+            dropout=dropout,
             qk_norm=qk_norm,
             eps=1e-6,
         )
 
-        self.ff = FeedForward(dim=dim, dim_out=dim, activation_fn="gelu-approximate", bias=True)
+        self.ff = nn.Sequential(
+            nn.Conv2d(dim, dim, 3, padding=1, bias=True),
+            nn.GELU(approximate="tanh"),
+            nn.Dropout(dropout),
+            nn.Conv2d(dim, dim, 3, padding=1, bias=True),
+        )
 
-        # let chunk size default to None
-        self._chunk_size = None
-        self._chunk_dim = 0
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        batch_size, channels, height, width = hidden_states.shape
+        latents_seq_len = height * width
 
-    # Copied from diffusers.models.attention.BasicTransformerBlock.set_chunk_feed_forward
-    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 0):
-        # Sets chunk feed-forward
-        self._chunk_size = chunk_size
-        self._chunk_dim = dim
+        hidden_states = hidden_states.reshape(batch_size, channels, latents_seq_len).transpose(1,2)
+        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None).clamp(-16384,16384)
+        hidden_states = hidden_states.transpose(1,2).reshape(batch_size, channels, height, width)
 
-    def forward(self, hidden_states: torch.FloatTensor):
-        attn_output = self.attn(hidden_states=hidden_states, encoder_hidden_states=None)
-        hidden_states = hidden_states + attn_output.clamp(-16384,16384)
+        hidden_states = hidden_states.clamp(-8192,8192)
+        hidden_states = hidden_states + self.ff(hidden_states).clamp(-16384,16384)
         hidden_states = hidden_states.clamp(-8192,8192)
 
-        if self._chunk_size is not None:
-            # "feed_forward_chunk_size" can be used to save memory
-            ff_output = _chunked_feed_forward(self.ff, hidden_states, self._chunk_dim, self._chunk_size)
-        else:
-            ff_output = self.ff(hidden_states)
-
-        hidden_states = hidden_states + ff_output.clamp(-16384,16384)
-        hidden_states = hidden_states.clamp(-8192,8192)
         return hidden_states
 
 
 @maybe_allow_in_graph
-class SoteDiffusionV3JointTransformerBlock(nn.Module):
+class SoteDiffusionV3SingleTransformerBlock(nn.Module):
     r"""
-     A Joint Transformer block as part of the Sote Diffusion V3 MMDiT architecture.
+    A Single Transformer block as part of the Sote Diffusion V3 MMCDit architecture.
 
     Parameters:
         dim (`int`): The number of channels in the input and output.
         num_attention_heads (`int`): The number of heads to use for multi-head attention.
         attention_head_dim (`int`): The number of channels in each head.
+        ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the feed forward hidden dimension.
+        dropout (`float`, *optional*, defaults to 0.0): The dropout probability to use.
+        qk_norm (`str`, *optional*, defaults to none): The qk normalization to use in attention.
     """
 
     def __init__(
@@ -103,6 +182,78 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
         dim: int,
         num_attention_heads: int,
         attention_head_dim: int,
+        ff_mult: int = 4,
+        dropout: float = 0.0,
+        qk_norm: Optional[str] = None,
+    ):
+        super().__init__()
+
+        if hasattr(F, "scaled_dot_product_attention"):
+            processor = SoteDiffusionV3CrossAttnProcessor2_0()
+        else:
+            raise ValueError(
+                "The current PyTorch version does not support the `scaled_dot_product_attention` function."
+            )
+
+        self.attn = Attention(
+            query_dim=dim,
+            cross_attention_dim=None,
+            added_kv_proj_dim=None,
+            dim_head=attention_head_dim,
+            heads=num_attention_heads,
+            out_dim=dim,
+            bias=True,
+            processor=processor,
+            dropout=dropout,
+            qk_norm=qk_norm,
+            eps=1e-6,
+        )
+
+        self.conv_transformer = SoteDiffusionV3ConvTransformer2DBlock(
+            dim=dim,
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            ff_mult=ff_mult,
+            dropout=dropout,
+            qk_norm=qk_norm,
+        )
+
+
+    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        batch_size, channels, height, width = hidden_states.shape
+        latents_seq_len = height * width
+
+        hidden_states = hidden_states.reshape(batch_size, channels, latents_seq_len).transpose(1,2)
+        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states).clamp(-16384,16384)
+        hidden_states = hidden_states.transpose(1,2).reshape(batch_size, channels, height, width)
+
+        hidden_states = hidden_states.clamp(-8192,8192)
+        hidden_states = self.conv_transformer(hidden_states)
+
+        return hidden_states
+
+
+@maybe_allow_in_graph
+class SoteDiffusionV3JointTransformerBlock(nn.Module):
+    r"""
+    A Joint Transformer block as part of the Sote Diffusion V3 MMCDit architecture.
+
+    Parameters:
+        dim (`int`): The number of channels in the input and output.
+        num_attention_heads (`int`): The number of heads to use for multi-head attention.
+        attention_head_dim (`int`): The number of channels in each head.
+        ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the feed forward hidden dimension.
+        dropout (`float`, *optional*, defaults to 0.0): The dropout probability to use.
+        qk_norm (`str`, *optional*, defaults to none): The qk normalization to use in attention.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        num_attention_heads: int,
+        attention_head_dim: int,
+        ff_mult: int = 4,
+        dropout: float = 0.0,
         qk_norm: Optional[str] = None,
     ):
         super().__init__()
@@ -114,6 +265,7 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
+        self.norm = nn.LayerNorm(dim, eps=1e-6, elementwise_affine=True)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -124,70 +276,68 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
             context_pre_only=False,
             bias=True,
             processor=processor,
+            dropout=dropout,
             qk_norm=qk_norm,
             eps=1e-6,
         )
 
-        self.ff = FeedForward(dim=dim, dim_out=dim, activation_fn="gelu-approximate", bias=True)
-        self.ff_context = FeedForward(dim=dim, dim_out=dim, activation_fn="gelu-approximate", bias=True)
+        self.linear_transformer = SoteDiffusionV3LinearTransformer1DBlock(
+            dim=dim,
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            ff_mult=ff_mult,
+            dropout=dropout,
+            qk_norm=qk_norm,
+        )
 
-        # let chunk size default to None
-        self._chunk_size = None
-        self._chunk_dim = 0
+        self.conv_transformer = SoteDiffusionV3ConvTransformer2DBlock(
+            dim=dim,
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            ff_mult=ff_mult,
+            dropout=dropout,
+            qk_norm=qk_norm,
+        )
 
-    # Copied from diffusers.models.attention.BasicTransformerBlock.set_chunk_feed_forward
-    def set_chunk_feed_forward(self, chunk_size: Optional[int], dim: int = 0):
-        # Sets chunk feed-forward
-        self._chunk_size = chunk_size
-        self._chunk_dim = dim
 
-    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor):
-        # Attention.
+    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        batch_size, channels, height, width = hidden_states.shape
+        latents_seq_len = height * width
+
+        hidden_states = self.conv_transformer(hidden_states)
+        encoder_hidden_states = self.linear_transformer(encoder_hidden_states)
+
+        hidden_states = hidden_states.reshape(batch_size, channels, latents_seq_len).transpose(1,2)
         attn_output, context_attn_output = self.attn(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
 
         hidden_states = hidden_states + attn_output.clamp(-16384,16384)
+        hidden_states = hidden_states.transpose(1,2).reshape(batch_size, channels, height, width)
         hidden_states = hidden_states.clamp(-8192,8192)
 
-        encoder_hidden_states = encoder_hidden_states + context_attn_output.clamp(-16384,16384)
-        encoder_hidden_states = encoder_hidden_states.clamp(-8192,8192)
-
-        if self._chunk_size is not None:
-            # "feed_forward_chunk_size" can be used to save memory
-            ff_output = _chunked_feed_forward(self.ff, hidden_states, self._chunk_dim, self._chunk_size)
-        else:
-            ff_output = self.ff(hidden_states)
-
-        hidden_states = hidden_states + ff_output.clamp(-16384,16384)
-        hidden_states = hidden_states.clamp(-8192,8192)
-
-        if self._chunk_size is not None:
-            # "feed_forward_chunk_size" can be used to save memory
-            ff_context_output = _chunked_feed_forward(self.ff_context, encoder_hidden_states, self._chunk_dim, self._chunk_size)
-        else:
-            ff_context_output = self.ff_context(encoder_hidden_states)
-
-        encoder_hidden_states = encoder_hidden_states + ff_context_output.clamp(-16384,16384)
-        encoder_hidden_states = encoder_hidden_states.clamp(-8192,8192)
+        encoder_hidden_states = encoder_hidden_states + context_attn_output
+        encoder_hidden_states = self.norm(encoder_hidden_states)
 
         return hidden_states, encoder_hidden_states
 
 
 class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     """
-    The Transformer model introduced in Sote Diffusion 3.
+    The Multi Modal Convoluted Transformer model introduced in Sote Diffusion 3.
 
     Parameters:
         sample_size (`int`): The width of the latent images. This is fixed during training since
             it is used to learn a number of position embeddings.
-        patch_size (`int`): Patch size to turn the input data into small patches.
         in_channels (`int`, *optional*, defaults to 16): The number of channels in the input.
-        num_layers (`int`, *optional*, defaults to 18): The number of nMMDiT layers of Transformer blocks to use.
+        num_joint_layers (`int`, *optional*, defaults to 18): The number of MMCDit layers of Transformer blocks to use.
         num_single_layers (`int`, *optional*, defaults to 18): The number of Single DiT layers of Transformer blocks to use.
         attention_head_dim (`int`, *optional*, defaults to 64): The number of channels in each head.
         num_attention_heads (`int`, *optional*, defaults to 18): The number of heads to use for multi-head attention.
         encoder_in_channels (`int`, *optional*): The number of `encoder_hidden_states` dimensions to use.
         caption_projection_dim (`int`): Number of dimensions to use when projecting the `encoder_hidden_states`.
         out_channels (`int`, defaults to 16): Number of output channels.
+        ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the feed forward hidden dimension.
+        dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
+        qk_norm (`str`, *optional*, defaults to none): The qk normalization to use in attention.
     """
 
     _supports_gradient_checkpointing = True
@@ -196,9 +346,8 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
     def __init__(
         self,
         sample_size: int = 64,
-        patch_size: int = 1,
         in_channels: int = 384,
-        num_layers: int = 8,
+        num_joint_layers: int = 8,
         num_single_layers: int = 32,
         attention_head_dim: int = 64,
         num_attention_heads: int = 32,
@@ -206,26 +355,30 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         encoder_base_seq_len: int = 1024,
         num_train_timesteps: int = 1000,
         out_channels: int = None,
+        ff_mult: int = 4,
+        dropout: float = 0.1,
         qk_norm: Optional[str] = None,
     ):
         super().__init__()
         self.out_channels = out_channels if out_channels is not None else in_channels
         self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
 
-        self.embedder = nn.Linear((((in_channels+4) * patch_size*patch_size) + 4), self.inner_dim, bias=True)
+        self.embedder = nn.Conv2d((in_channels + 8), self.inner_dim, 3, padding=1, bias=True)
 
-        self.context_embedder = nn.Linear((encoder_in_channels + 4), self.inner_dim, bias=True)
         self.context_embedder_norm = nn.LayerNorm(encoder_in_channels, eps=1e-6, elementwise_affine=True)
+        self.context_embedder = nn.Linear((encoder_in_channels + 4), self.inner_dim, bias=True)
 
-        self.transformer_blocks = nn.ModuleList(
+        self.joint_transformer_blocks = nn.ModuleList(
             [
                 SoteDiffusionV3JointTransformerBlock(
                     dim=self.inner_dim,
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
+                    ff_mult=ff_mult,
+                    dropout=dropout,
                     qk_norm=qk_norm,
                 )
-                for _ in range(self.config.num_layers)
+                for _ in range(self.config.num_joint_layers)
             ]
         )
 
@@ -235,13 +388,15 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     dim=self.inner_dim,
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
+                    ff_mult=ff_mult,
+                    dropout=dropout,
                     qk_norm=qk_norm,
                 )
                 for _ in range(self.config.num_single_layers)
             ]
         )
 
-        self.unembedder = nn.Linear(self.inner_dim, self.out_channels*patch_size*patch_size, bias=True)
+        self.unembedder = nn.Conv2d(self.inner_dim, self.out_channels, 3, padding=1, bias=True)
 
         self.gradient_checkpointing = False
 
@@ -352,7 +507,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: torch.FloatTensor = None,
         timestep: torch.LongTensor = None,
-        block_controlnet_hidden_states: List = None,
+        joint_block_controlnet_hidden_states: List = None,
         single_block_controlnet_hidden_states: List = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
@@ -368,8 +523,8 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 Conditional embeddings (embeddings computed from the input conditions such as prompts) to use.
             timestep (`torch.LongTensor`):
                 Used to indicate denoising step.
-            block_controlnet_hidden_states (`list` of `torch.Tensor`):
-                A list of tensors that if specified are added to the residuals of transformer blocks.
+            joint_block_controlnet_hidden_states (`list` of `torch.Tensor`):
+                A list of tensors that if specified are added to the residuals of joint transformer blocks.
             single_block_controlnet_hidden_states (`list` of `torch.Tensor`):
                 A list of tensors that if specified are added to the residuals of single transformer blocks.
             joint_attention_kwargs (`dict`, *optional*):
@@ -402,20 +557,20 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 )
 
         batch_size, _, height, width = hidden_states.shape
+        latents_seq_len = height * width
 
         if return_noise_pred:
             noisy_input = hidden_states.clone()
-        sigmas = timestep.view(batch_size,1).to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
+        sigmas = timestep.to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
 
-        hidden_states = SoteDiffusionV3PosEmbed2D(hidden_states)
-        hidden_states = SoteDiffusionV3PatchEmbed2D(latents=hidden_states, sigmas=sigmas, patch_size=self.config.patch_size, embeds_seq_len=encoder_hidden_states.shape[1], base_seq_len=(self.config.sample_size*self.config.sample_size))
+        hidden_states = SoteDiffusionV3PosEmbed2D(hidden_states, sigmas=sigmas, embeds_seq_len=encoder_hidden_states.shape[1], base_seq_len=(self.config.sample_size*self.config.sample_size))
         hidden_states = self.embedder(hidden_states).clamp(-8192,8192)
 
         encoder_hidden_states = self.context_embedder_norm(encoder_hidden_states)
-        encoder_hidden_states = SoteDiffusionV3PosEmbed1D(embeds=encoder_hidden_states, sigmas=sigmas, latents_seq_len=hidden_states.shape[1], base_seq_len=self.config.encoder_base_seq_len)
+        encoder_hidden_states = SoteDiffusionV3PosEmbed1D(embeds=encoder_hidden_states, sigmas=sigmas, latents_seq_len=latents_seq_len, base_seq_len=self.config.encoder_base_seq_len)
         encoder_hidden_states = self.context_embedder(encoder_hidden_states).clamp(-8192,8192)
 
-        for index_block, block in enumerate(self.transformer_blocks):
+        for index_block, block in enumerate(self.joint_transformer_blocks):
 
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states, encoder_hidden_states = self._gradient_checkpointing_func(
@@ -430,31 +585,30 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 )
 
             # controlnet residual
-            if block_controlnet_hidden_states is not None:
-                interval_control = len(self.transformer_blocks) / len(block_controlnet_hidden_states)
-                hidden_states = hidden_states + block_controlnet_hidden_states[int(index_block / interval_control)]
+            if joint_block_controlnet_hidden_states is not None:
+                interval_control = len(self.joint_transformer_blocks) / len(joint_block_controlnet_hidden_states)
+                hidden_states = hidden_states + joint_block_controlnet_hidden_states[int(index_block / interval_control)][0]
+                encoder_hidden_states = encoder_hidden_states + joint_block_controlnet_hidden_states[int(index_block / interval_control)][1]
 
-        hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
         for index_block, block in enumerate(self.single_transformer_blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states = self._gradient_checkpointing_func(
                     block,
                     hidden_states,
+                    encoder_hidden_states,
                 )
             else:
                 hidden_states = block(
                     hidden_states=hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
                 )
             # controlnet residual
             if single_block_controlnet_hidden_states is not None:
                 interval_control = len(self.single_transformer_blocks) / len(single_block_controlnet_hidden_states)
                 hidden_states = hidden_states + single_block_controlnet_hidden_states[int(index_block / interval_control)]
 
-        hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :]
-
-        hidden_states = self.unembedder(hidden_states)
-        x0_pred = hidden_states.transpose(1,2).reshape((batch_size, self.out_channels, height, width))
+        x0_pred = self.unembedder(hidden_states)
 
         # x0_pred to flowmatch
         if return_noise_pred:

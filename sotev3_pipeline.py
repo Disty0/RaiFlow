@@ -128,7 +128,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
     r"""
     Args:
         transformer ([`SoteDiffusionV3Transformer2DModel`]):
-            Conditional Transformer (nMMDiT-T) architecture to denoise the encoded image latents.
+            Conditional Transformer (MMNet) architecture to denoise the encoded image latents.
         scheduler ([`FlowMatchEulerDiscreteScheduler`]):
             A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
         image_encoder ([`SoteV3ImageEncoder`]):
@@ -167,7 +167,6 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             if hasattr(self, "transformer") and self.transformer is not None
             else 128
         )
-        self.patch_size = self.transformer.config.patch_size if hasattr(self, "transformer") and self.transformer is not None else 1
 
     def _get_qwen2_prompt_embeds(
             self,
@@ -394,12 +393,12 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         min_sequence_length=None,
     ):
         if (
-            height % (self.image_encoder.config.block_size * self.patch_size) != 0
-            or width % (self.image_encoder.config.block_size * self.patch_size) != 0
+            height % self.image_encoder.config.block_size != 0
+            or width % self.image_encoder.config.block_size != 0
         ):
             raise ValueError(
-                f"`height` and `width` have to be divisible by {self.image_encoder.config.block_size * self.patch_size} but are {height} and {width}."
-                f"You can use height {height - height % (self.image_encoder.config.block_size * self.patch_size)} and width {width - width % (self.image_encoder.config.block_size * self.patch_size)}."
+                f"`height` and `width` have to be divisible by {self.image_encoder.config.block_size} but are {height} and {width}."
+                f"You can use height {height - height % (self.image_encoder.config.block_size)} and width {width - width % (self.image_encoder.config.block_size)}."
             )
 
         if callback_on_step_end_tensor_inputs is not None and not all(
@@ -459,6 +458,10 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         if latents is not None:
             return latents.to(device=device, dtype=dtype)
 
+        return_device = device
+        if device.type == "xpu":
+            device = "cpu"
+
         shape = (batch_size, int(height), int(width), 3)
 
         if isinstance(generator, list) and len(generator) != batch_size:
@@ -468,7 +471,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             )
 
         latents = uniform_tensor(shape, min_value=0, max_value=(255+1e-4), generator=generator, device=device, dtype=torch.float32).clamp(0,255)
-        latents = self.image_encoder.encode(latents, device=device).to(device, dtype=dtype)
+        latents = self.image_encoder.encode(latents, device=device).to(return_device, dtype=dtype)
 
         return latents
 
@@ -688,9 +691,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         scheduler_kwargs = {}
         if self.scheduler.config.get("use_dynamic_shifting", None) and mu is None:
             _, _, latent_height, latent_width = latents.shape
-            image_seq_len = (latent_height // self.transformer.config.patch_size) * (
-                latent_width // self.transformer.config.patch_size
-            )
+            image_seq_len = latent_height * latent_width
             mu = calculate_shift(
                 image_seq_len,
                 self.scheduler.config.get("base_image_seq_len", 256),

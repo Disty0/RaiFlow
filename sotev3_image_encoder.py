@@ -11,7 +11,7 @@ from diffusers.image_processor import PipelineImageInput
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from transformers import ImageProcessingMixin
 
-from sotev3.torch_dct import dct_2d, idct_2d
+from .torch_dct import dct_2d, idct_2d
 
 
 def rgb_to_ycbcr_tensor(image: torch.Tensor) -> torch.Tensor:
