@@ -235,7 +235,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         prompt_embeds: Optional[torch.FloatTensor] = None,
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         max_sequence_length: int = 1024,
-        min_sequence_length: int = 128,
+        min_sequence_length: int = 256,
     ):
         r"""
 
@@ -291,8 +291,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             for embed in prompt_embeds:
                 max_len = max(max_len, embed.shape[0])
             max_len = max(max_len, min_sequence_length)
-            if max_len % 64 != 0: # make it a multiple of 64
-                max_len +=  64 - (max_len % 64)
+            if max_len % 256 != 0: # make it a multiple of 256
+                max_len +=  256 - (max_len % 256)
 
             embed_dim = prompt_embeds[0].shape[-1]
             for i in range(len(prompt_embeds)):
@@ -301,7 +301,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     prompt_embeds[i] = torch.cat(
                         [
                             prompt_embeds[i],
-                            torch.zeros((max_len-seq_len, embed_dim), device=prompt_embeds[i].device, dtype=prompt_embeds[i].dtype)
+                            torch.ones((max_len-seq_len, embed_dim), device=prompt_embeds[i].device, dtype=prompt_embeds[i].dtype)
                         ],
                         dim=0,
                     )
@@ -345,8 +345,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             for embed in negative_prompt_embeds:
                 max_len = max(max_len, embed.shape[0])
             max_len = max(max_len, prompt_embeds.shape[1])
-            if max_len % 64 != 0: # make it a multiple of 64
-                max_len +=  64 - (max_len % 64)
+            if max_len % 256 != 0: # make it a multiple of 256
+                max_len +=  256 - (max_len % 256)
 
             embed_dim = negative_prompt_embeds[0].shape[-1]
             for i in range(len(negative_prompt_embeds)):
@@ -355,7 +355,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     negative_prompt_embeds[i] = torch.cat(
                         [
                             negative_prompt_embeds[i],
-                            torch.zeros((max_len-seq_len, embed_dim), device=negative_prompt_embeds[i].device, dtype=negative_prompt_embeds[i].dtype)
+                            torch.ones((max_len-seq_len, embed_dim), device=negative_prompt_embeds[i].device, dtype=negative_prompt_embeds[i].dtype)
                         ],
                         dim=0,
                     )
@@ -372,7 +372,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 prompt_embeds = torch.cat(
                         [
                             prompt_embeds,
-                            torch.zeros((batch_size, negative_prompt_embeds.shape[1]-seq_len, embed_dim), device=prompt_embeds[i].device, dtype=prompt_embeds[i].dtype)
+                            torch.ones((batch_size, negative_prompt_embeds.shape[1]-seq_len, embed_dim), device=prompt_embeds[i].device, dtype=prompt_embeds[i].dtype)
                         ],
                         dim=1,
                     )
@@ -529,7 +529,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 1024,
-        min_sequence_length: int = 128,
+        min_sequence_length: int = 256,
         mu: Optional[float] = None,
     ):
         r"""
@@ -736,6 +736,10 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 # perform guidances
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+
+                    noise_pred = (noise_pred_text * self.guidance_scale) - (noise_pred_uncond * (self.guidance_scale - 1))
+
+                    """
                     x0_pred_uncond, x0_pred_text = x0_pred.chunk(2)
 
                     if t == self.transformer.config.num_timesteps and self.sotediffusion_guidence_base_shift > 0:
@@ -757,6 +761,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     current_sigma = t.to(x0_pred_text_cfg.dtype) / self.transformer.config.num_timesteps
 
                     noise_pred = noise_pred_text_cfg - (x0_pred_guidance_scale * ((x0_pred_text_cfg - x0_pred_uncond_cfg) * current_sigma))
+                    """
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
@@ -787,6 +792,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         if output_type == "latent":
             image = latents
         else:
+            if latents.device.type == "xpu":
+                latents = latents.to("cpu")
             image = self.image_encoder.decode(latents, return_type=output_type)
 
         # Offload all models
