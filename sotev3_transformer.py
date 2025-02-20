@@ -39,6 +39,7 @@ class SoteDiffusionV3LinearTransformer1DBlock(nn.Module):
         num_attention_heads: int,
         attention_head_dim: int,
         ff_mult: int = 4,
+        eps: float = 1e-05,
         dropout: float = 0.0,
         qk_norm: Optional[str] = None,
     ):
@@ -51,7 +52,7 @@ class SoteDiffusionV3LinearTransformer1DBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
-        self.norm = nn.LayerNorm(dim, eps=1e-6, elementwise_affine=True)
+        self.norm = nn.GroupNorm(num_attention_heads, dim, eps=eps, affine=True)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -63,10 +64,10 @@ class SoteDiffusionV3LinearTransformer1DBlock(nn.Module):
             processor=processor,
             dropout=dropout,
             qk_norm=qk_norm,
-            eps=1e-6,
+            eps=eps,
         )
 
-        self.norm2 = nn.LayerNorm(dim, eps=1e-6, elementwise_affine=True)
+        self.norm2 = nn.GroupNorm(num_attention_heads, dim, eps=eps, affine=True)
         self.ff = FeedForward(dim=dim, dim_out=dim, mult=ff_mult, dropout=dropout, activation_fn="gelu-approximate", bias=True)
 
         # let chunk size default to None
@@ -81,7 +82,7 @@ class SoteDiffusionV3LinearTransformer1DBlock(nn.Module):
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None)
-        hidden_states = self.norm(hidden_states)
+        hidden_states = self.norm(hidden_states.transpose(1,2)).transpose(1,2)
 
         if self._chunk_size is not None:
             # "feed_forward_chunk_size" can be used to save memory
@@ -90,7 +91,7 @@ class SoteDiffusionV3LinearTransformer1DBlock(nn.Module):
             ff_output = self.ff(hidden_states)
 
         hidden_states = hidden_states + ff_output
-        hidden_states = self.norm2(hidden_states)
+        hidden_states = self.norm2(hidden_states.transpose(1,2)).transpose(1,2)
 
         return hidden_states
 
@@ -115,6 +116,7 @@ class SoteDiffusionV3ConvTransformer2DBlock(nn.Module):
         num_attention_heads: int,
         attention_head_dim: int,
         ff_mult: int = 4,
+        eps: float = 1e-05,
         dropout: float = 0.0,
         qk_norm: Optional[str] = None,
     ):
@@ -138,11 +140,12 @@ class SoteDiffusionV3ConvTransformer2DBlock(nn.Module):
             processor=processor,
             dropout=dropout,
             qk_norm=qk_norm,
-            eps=1e-6,
+            eps=eps,
         )
 
         self.ff = nn.Sequential(
             nn.Conv2d(dim, dim, 3, padding=1, bias=True),
+            nn.GroupNorm(num_attention_heads, dim, eps=eps, affine=True),
             nn.GELU(approximate="tanh"),
             nn.Dropout(dropout),
             nn.Conv2d(dim, dim, 3, padding=1, bias=True),
@@ -183,6 +186,7 @@ class SoteDiffusionV3SingleTransformerBlock(nn.Module):
         num_attention_heads: int,
         attention_head_dim: int,
         ff_mult: int = 4,
+        eps: float = 1e-05,
         dropout: float = 0.0,
         qk_norm: Optional[str] = None,
     ):
@@ -206,7 +210,7 @@ class SoteDiffusionV3SingleTransformerBlock(nn.Module):
             processor=processor,
             dropout=dropout,
             qk_norm=qk_norm,
-            eps=1e-6,
+            eps=eps,
         )
 
         self.conv_transformer = SoteDiffusionV3ConvTransformer2DBlock(
@@ -253,6 +257,7 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
         num_attention_heads: int,
         attention_head_dim: int,
         ff_mult: int = 4,
+        eps: float = 1e-05,
         dropout: float = 0.0,
         qk_norm: Optional[str] = None,
     ):
@@ -265,7 +270,7 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
-        self.norm = nn.LayerNorm(dim, eps=1e-6, elementwise_affine=True)
+        self.norm = nn.GroupNorm(num_attention_heads, dim, eps=eps, affine=True)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -278,7 +283,7 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
             processor=processor,
             dropout=dropout,
             qk_norm=qk_norm,
-            eps=1e-6,
+            eps=eps,
         )
 
         self.linear_transformer = SoteDiffusionV3LinearTransformer1DBlock(
@@ -315,7 +320,7 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
         hidden_states = hidden_states.clamp(-8192,8192)
 
         encoder_hidden_states = encoder_hidden_states + context_attn_output
-        encoder_hidden_states = self.norm(encoder_hidden_states)
+        encoder_hidden_states = self.norm(encoder_hidden_states.transpose(1,2)).transpose(1,2)
 
         return hidden_states, encoder_hidden_states
 
@@ -356,6 +361,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         num_train_timesteps: int = 1000,
         out_channels: int = None,
         ff_mult: int = 4,
+        eps: float = 1e-05,
         dropout: float = 0.1,
         qk_norm: Optional[str] = None,
     ):
@@ -365,7 +371,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
 
         self.embedder = nn.Conv2d((in_channels + 8), self.inner_dim, 3, padding=1, bias=True)
 
-        self.context_embedder_norm = nn.LayerNorm(encoder_in_channels, eps=1e-6, elementwise_affine=True)
+        self.context_embedder_norm = nn.LayerNorm(encoder_in_channels, eps=eps, elementwise_affine=True)
         self.context_embedder = nn.Linear((encoder_in_channels + 4), self.inner_dim, bias=True)
 
         self.joint_transformer_blocks = nn.ModuleList(
@@ -375,6 +381,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
                     ff_mult=ff_mult,
+                    eps=eps,
                     dropout=dropout,
                     qk_norm=qk_norm,
                 )
@@ -389,6 +396,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
                     ff_mult=ff_mult,
+                    eps=eps,
                     dropout=dropout,
                     qk_norm=qk_norm,
                 )
