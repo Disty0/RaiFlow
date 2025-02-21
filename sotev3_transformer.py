@@ -52,7 +52,6 @@ class SoteDiffusionV3LinearTransformer1DBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
-        self.norm = nn.GroupNorm(num_attention_heads, dim, eps=eps, affine=True)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -67,7 +66,6 @@ class SoteDiffusionV3LinearTransformer1DBlock(nn.Module):
             eps=eps,
         )
 
-        self.norm2 = nn.GroupNorm(num_attention_heads, dim, eps=eps, affine=True)
         self.ff = FeedForward(dim=dim, dim_out=dim, mult=ff_mult, dropout=dropout, activation_fn="gelu-approximate", bias=True)
 
         # let chunk size default to None
@@ -81,8 +79,8 @@ class SoteDiffusionV3LinearTransformer1DBlock(nn.Module):
         self._chunk_dim = dim
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None)
-        hidden_states = self.norm(hidden_states.transpose(1,2)).transpose(1,2)
+        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None).clamp(-384,384)
+        hidden_states = hidden_states.clamp(-192,192)
 
         if self._chunk_size is not None:
             # "feed_forward_chunk_size" can be used to save memory
@@ -90,8 +88,8 @@ class SoteDiffusionV3LinearTransformer1DBlock(nn.Module):
         else:
             ff_output = self.ff(hidden_states)
 
-        hidden_states = hidden_states + ff_output
-        hidden_states = self.norm2(hidden_states.transpose(1,2)).transpose(1,2)
+        hidden_states = hidden_states + ff_output.clamp(-384,384)
+        hidden_states = hidden_states.clamp(-192,192)
 
         return hidden_states
 
@@ -145,7 +143,6 @@ class SoteDiffusionV3ConvTransformer2DBlock(nn.Module):
 
         self.ff = nn.Sequential(
             nn.Conv2d(dim, dim, 3, padding=1, bias=True),
-            nn.GroupNorm(num_attention_heads, dim, eps=eps, affine=True),
             nn.GELU(approximate="tanh"),
             nn.Dropout(dropout),
             nn.Conv2d(dim, dim, 3, padding=1, bias=True),
@@ -156,12 +153,12 @@ class SoteDiffusionV3ConvTransformer2DBlock(nn.Module):
         latents_seq_len = height * width
 
         hidden_states = hidden_states.reshape(batch_size, channels, latents_seq_len).transpose(1,2)
-        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None).clamp(-16384,16384)
+        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None).clamp(-384,384)
         hidden_states = hidden_states.transpose(1,2).reshape(batch_size, channels, height, width)
 
-        hidden_states = hidden_states.clamp(-8192,8192)
-        hidden_states = hidden_states + self.ff(hidden_states).clamp(-16384,16384)
-        hidden_states = hidden_states.clamp(-8192,8192)
+        hidden_states = hidden_states.clamp(-192,192)
+        hidden_states = hidden_states + self.ff(hidden_states).clamp(-384,384)
+        hidden_states = hidden_states.clamp(-192,192)
 
         return hidden_states
 
@@ -228,10 +225,10 @@ class SoteDiffusionV3SingleTransformerBlock(nn.Module):
         latents_seq_len = height * width
 
         hidden_states = hidden_states.reshape(batch_size, channels, latents_seq_len).transpose(1,2)
-        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states).clamp(-16384,16384)
+        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states).clamp(-384,384)
         hidden_states = hidden_states.transpose(1,2).reshape(batch_size, channels, height, width)
 
-        hidden_states = hidden_states.clamp(-8192,8192)
+        hidden_states = hidden_states.clamp(-192,192)
         hidden_states = self.conv_transformer(hidden_states)
 
         return hidden_states
@@ -270,7 +267,6 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
-        self.norm = nn.GroupNorm(num_attention_heads, dim, eps=eps, affine=True)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -315,12 +311,12 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
         hidden_states = hidden_states.reshape(batch_size, channels, latents_seq_len).transpose(1,2)
         attn_output, context_attn_output = self.attn(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
 
-        hidden_states = hidden_states + attn_output.clamp(-16384,16384)
+        hidden_states = hidden_states + attn_output.clamp(-384,384)
         hidden_states = hidden_states.transpose(1,2).reshape(batch_size, channels, height, width)
-        hidden_states = hidden_states.clamp(-8192,8192)
+        hidden_states = hidden_states.clamp(-192,192)
 
-        encoder_hidden_states = encoder_hidden_states + context_attn_output
-        encoder_hidden_states = self.norm(encoder_hidden_states.transpose(1,2)).transpose(1,2)
+        encoder_hidden_states = encoder_hidden_states + context_attn_output.clamp(-384,384)
+        encoder_hidden_states = encoder_hidden_states.clamp(-192,192)
 
         return hidden_states, encoder_hidden_states
 
@@ -572,11 +568,11 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         sigmas = timestep.to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
 
         hidden_states = SoteDiffusionV3PosEmbed2D(hidden_states, sigmas=sigmas, embeds_seq_len=encoder_hidden_states.shape[1], base_seq_len=(self.config.sample_size*self.config.sample_size))
-        hidden_states = self.embedder(hidden_states).clamp(-8192,8192)
+        hidden_states = self.embedder(hidden_states).clamp(-192,192) # worst case is 160
 
-        encoder_hidden_states = self.context_embedder_norm(encoder_hidden_states)
+        encoder_hidden_states = self.context_embedder_norm(encoder_hidden_states) / 4
         encoder_hidden_states = SoteDiffusionV3PosEmbed1D(embeds=encoder_hidden_states, sigmas=sigmas, latents_seq_len=latents_seq_len, base_seq_len=self.config.encoder_base_seq_len)
-        encoder_hidden_states = self.context_embedder(encoder_hidden_states).clamp(-8192,8192)
+        encoder_hidden_states = self.context_embedder(encoder_hidden_states).clamp(-192,192)
 
         for index_block, block in enumerate(self.joint_transformer_blocks):
 

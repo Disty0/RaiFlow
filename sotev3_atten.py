@@ -22,9 +22,9 @@ class SoteDiffusionV3AttnProcessor2_0:
         batch_size, seq_len, _ = hidden_states.shape
 
         # `sample` projections.
-        query = attn.to_q(hidden_states)
-        key = attn.to_k(hidden_states)
-        value = attn.to_v(hidden_states)
+        query = attn.to_q(hidden_states).clamp(-384,384)
+        key = attn.to_k(hidden_states).clamp(-384,384)
+        value = attn.to_v(hidden_states).clamp(-384,384)
 
         attn_heads = attn.heads
         head_dim = attn.inner_dim // attn_heads
@@ -43,9 +43,9 @@ class SoteDiffusionV3AttnProcessor2_0:
         if encoder_hidden_states is not None:
             _, encoder_seq_len, _ = encoder_hidden_states.shape
             total_seq_len = seq_len + encoder_seq_len
-            encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
-            encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
-            encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
+            encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states).clamp(-384,384)
+            encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states).clamp(-384,384)
+            encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states).clamp(-384,384)
 
             encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
                 batch_size, encoder_seq_len, attn_heads, head_dim
@@ -108,9 +108,9 @@ class SoteDiffusionV3CrossAttnProcessor2_0:
         _, secondary_seq_len, _ = encoder_hidden_states.shape
 
         # `sample` projections.
-        query = attn.to_q(hidden_states)
-        key = attn.to_k(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states).clamp(-16384,16384)
+        query = attn.to_q(hidden_states).clamp(-384,384)
+        key = attn.to_k(encoder_hidden_states).clamp(-384,384)
+        value = attn.to_v(encoder_hidden_states).clamp(-384,384)
 
         attn_heads = attn.heads
         head_dim = attn.inner_dim // attn_heads
@@ -120,13 +120,9 @@ class SoteDiffusionV3CrossAttnProcessor2_0:
         value = value.view(batch_size, secondary_seq_len, attn_heads, head_dim).transpose(1, 2)
 
         if attn.norm_q is not None:
-            query = attn.norm_q(query.clamp(-16384,16384))
-        else:
-            query = query.clamp(-255,255)
+            query = attn.norm_q(query)
         if attn.norm_k is not None:
-            key = attn.norm_k(key.clamp(-16384,16384))
-        else:
-            key = key.clamp(-255,255)
+            key = attn.norm_k(key)
 
         attn_output = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
         attn_output = attn_output.transpose(1, 2).reshape(batch_size, seq_len, attn_heads * head_dim)
