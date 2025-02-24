@@ -7,32 +7,60 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 def SoteDiffusionV3PosEmbed1D(embeds: torch.Tensor, sigmas: torch.Tensor, latents_seq_len: int, base_seq_len: int):
     batch_size, seq_len, _ = embeds.shape
+    device = embeds.device
+    dtype = embeds.dtype
 
-    posed_embeds = torch.ones((batch_size, seq_len, 4), device=embeds.device, dtype=embeds.dtype)
-    posed_embeds[:, :, 0] = torch.linspace(start=0, end=1, steps=seq_len, device=embeds.device, dtype=embeds.dtype)
-    posed_embeds[:, :, 1] = torch.linspace(start=0, end=1, steps=(seq_len + latents_seq_len), device=embeds.device, dtype=embeds.dtype)[:seq_len]
-    posed_embeds[:, :, 2] = posed_embeds[:, :, 2] * (seq_len / base_seq_len)
-    posed_embeds[:, :, 3] = posed_embeds[:, :, 3] * sigmas.view(batch_size, 1)
+    # Create 1D linspace tensors on the target device
+    posed_embeds_ch0 = torch.linspace(start=0, end=1, steps=seq_len, device=device, dtype=dtype)
+    posed_embeds_ch1 = torch.linspace(start=0, end=1, steps=(seq_len + latents_seq_len), device=device, dtype=dtype)[:seq_len]
 
-    embeds = torch.cat([embeds, posed_embeds], dim=2)
-    return embeds
+    ones = torch.ones((batch_size, seq_len, 1), device=device, dtype=dtype)
+    posed_embeds_ch2 = ones * (seq_len / base_seq_len)
+    posed_embeds_ch3 = ones * sigmas.view(batch_size, 1, 1)
+
+    # stack and repeat for batch_size
+    posed_embeds = torch.stack([posed_embeds_ch0, posed_embeds_ch1], dim=1)
+    posed_embeds = posed_embeds.unsqueeze(0).repeat(batch_size, 1, 1)
+
+    posed_embeds = torch.cat([posed_embeds, posed_embeds_ch2, posed_embeds_ch3], dim=2)
+    posed_embeds = torch.cat([embeds, posed_embeds], dim=2)
+
+    return posed_embeds
 
 
 def SoteDiffusionV3PosEmbed2D(latents: torch.FloatTensor, sigmas: torch.FloatTensor, embeds_seq_len: int, base_seq_len: int):
     batch_size, _, height, width = latents.shape
     seq_len = height * width
     max_dim = max(width, height)
-    posed_latents = torch.ones((batch_size, 8, height, width), device="cpu", dtype=torch.float32)
-    for x in range(width):
-        posed_latents[:, 0, :, x] = torch.linspace(start=0, end=1, steps=height)
-        posed_latents[:, 1, :, x] = torch.linspace(start=0, end=1, steps=max_dim)[:height]
-    for y in range(height):
-        posed_latents[:, 2, y, :] = torch.linspace(start=0, end=1, steps=width)
-        posed_latents[:, 3, y, :] = torch.linspace(start=0, end=1, steps=max_dim)[:width]
-    posed_latents[:, 4, :, :] = torch.linspace(start=0, end=1, steps=seq_len, device=latents.device, dtype=latents.dtype).reshape(height,width)
-    posed_latents[:, 5, :, :] = torch.linspace(start=0, end=1, steps=(seq_len + embeds_seq_len), device=latents.device, dtype=latents.dtype)[embeds_seq_len:].reshape(height,width)
-    posed_latents[:, 6, :, :] = posed_latents[:, 6, :, :] * (seq_len / base_seq_len)
-    posed_latents[:, 7, :, :] = posed_latents[:, 7, :, :] * sigmas.view(batch_size, 1, 1).to("cpu", dtype=torch.float32)
-    posed_latents = posed_latents.to(latents.device, dtype=latents.dtype)
-    posed_latents = torch.cat([latents, posed_latents], dim=1)
+    device = latents.device
+    dtype = latents.dtype
+
+    # create 1D linspace tensors on the target device
+    width_1d = torch.linspace(0, 1, width, device=device, dtype=dtype)
+    height_1d = torch.linspace(0, 1, height, device=device, dtype=dtype)
+    max_dim_width_1d = torch.linspace(0, 1, max_dim, device=device, dtype=dtype)[:width]
+    max_dim_height_1d = torch.linspace(0, 1, max_dim, device=device, dtype=dtype)[:height]
+    seq_1d = torch.linspace(0, 1, seq_len, device=device, dtype=dtype)
+    seq_embed_1d = torch.linspace(0, 1, (seq_len + embeds_seq_len), device=device, dtype=dtype)[embeds_seq_len:]
+
+
+    # broadcast to create 2D linspace grids
+    posed_latents_ch0 = height_1d.reshape(height, 1).repeat(1, width)
+    posed_latents_ch1 = max_dim_height_1d.reshape(height, 1).repeat(1, width)
+    posed_latents_ch2 = width_1d.reshape(1, width).repeat(height, 1)
+    posed_latents_ch3 = max_dim_width_1d.reshape(1, width).repeat(height, 1)
+    posed_latents_ch4 = seq_1d.reshape(height, width)
+    posed_latents_ch5 = seq_embed_1d.reshape(height, width)
+
+    ones = torch.ones((batch_size, 1, height, width), device=device, dtype=dtype)
+    posed_latents_ch6 = ones * (seq_len / base_seq_len)
+    posed_latents_ch7 = ones * sigmas.view(batch_size, 1, 1, 1)
+
+    # stack and repeat
+    posed_latents = torch.stack([posed_latents_ch0, posed_latents_ch1, posed_latents_ch2, posed_latents_ch3, posed_latents_ch4, posed_latents_ch5], dim=0) # (6, height, width)
+    posed_latents = posed_latents.unsqueeze(0).repeat(batch_size, 1, 1, 1) # (batch_size, 6, height, width)
+
+    posed_latents = torch.cat([posed_latents, posed_latents_ch6, posed_latents_ch7], dim=1) # (batch_size, 8, height, width)
+    posed_latents = torch.cat([latents, posed_latents], dim=1) # (batch_size, in_channels + 8, height, width)
+
     return posed_latents

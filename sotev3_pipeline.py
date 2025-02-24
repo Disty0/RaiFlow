@@ -15,9 +15,9 @@ from diffusers.utils import (
     replace_example_docstring,
 )
 
+from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
-from .sotev3_torch_utils import uniform_tensor
 from .sotev3_transformer import SoteDiffusionV3Transformer2DModel
 from .sotev3_image_encoder import SoteV3ImageEncoder
 from .sotev3_pipeline_output import SoteDiffusionV3PipelineOutput
@@ -458,11 +458,12 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         if latents is not None:
             return latents.to(device=device, dtype=dtype)
 
-        return_device = device
-        if device.type == "xpu":
-            device = "cpu"
-
-        shape = (batch_size, int(height), int(width), 3)
+        shape = (
+            batch_size,
+            num_channels_latents,
+            int(height) // self.image_encoder.block_size,
+            int(width) // self.image_encoder.block_size,
+        )
 
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
@@ -470,8 +471,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        latents = uniform_tensor(shape, min_value=0, max_value=(255+1e-4), generator=generator, device=device, dtype=torch.float32).clamp(0,255)
-        latents = self.image_encoder.encode(latents, device=device).to(return_device, dtype=dtype)
+        latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
 
         return latents
 
@@ -725,25 +725,21 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0])
 
-                x0_pred, noise_pred = self.transformer(
+                noise_pred = self.transformer(
                     hidden_states=latent_model_input,
                     timestep=timestep,
                     encoder_hidden_states=prompt_embeds,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
-                    return_noise_pred=True,
                 )[0]
 
                 # perform guidances
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-
                     noise_pred = (noise_pred_text * self.guidance_scale) - (noise_pred_uncond * (self.guidance_scale - 1))
 
                     """
-                    x0_pred_uncond, x0_pred_text = x0_pred.chunk(2)
-
-                    if t == self.transformer.config.num_timesteps and self.sotediffusion_guidence_base_shift > 0:
+                    if t == self.scheduler.config.num_train_timesteps and self.sotediffusion_guidence_base_shift != 0.0:
                         # downscale cfg at the first step to fix everything becoming black issue
                         downscaled_guidance_scale = (self.guidance_scale / 2) / (self.sotediffusion_guidence_base_shift / self.scheduler.shift)
                     else:
@@ -752,16 +748,18 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
 
                     if downscaled_guidance_scale > 1:
                         noise_pred_text_cfg = (noise_pred_text * downscaled_guidance_scale) - (noise_pred_uncond * (downscaled_guidance_scale - 1))
+                        noise_pred_uncond_cfg = (noise_pred_uncond * downscaled_guidance_scale) - (noise_pred_text * (downscaled_guidance_scale - 1))
                         x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale
                     else:
                         noise_pred_text_cfg = noise_pred_text
+                        noise_pred_uncond_cfg = noise_pred_uncond
                         x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale + self.guidance_scale
 
-                    x0_pred_text_cfg = (x0_pred_text * downscaled_guidance_scale) - (x0_pred_uncond * (downscaled_guidance_scale - 1))
-                    x0_pred_uncond_cfg = (x0_pred_uncond * downscaled_guidance_scale) - (x0_pred_text * (downscaled_guidance_scale - 1))
-                    current_sigma = t.to(x0_pred_text_cfg.dtype) / self.transformer.config.num_timesteps
+                    current_sigma = self.scheduler.sigmas[self.scheduler.step_index or i]
+                    x0_pred_text = latents - (noise_pred_text_cfg * current_sigma)
+                    x0_pred_uncond = latents - (noise_pred_uncond_cfg * current_sigma)
 
-                    noise_pred = noise_pred_text_cfg - (x0_pred_guidance_scale * ((x0_pred_text_cfg - x0_pred_uncond_cfg) * current_sigma))
+                    noise_pred = noise_pred_text_cfg - x0_pred_guidance_scale * ((x0_pred_text - x0_pred_uncond) * current_sigma)
                     """
 
                 # compute the previous noisy sample x_t -> x_t-1

@@ -1,4 +1,4 @@
-from .sotev3_transformer import SoteDiffusionV3Transformer2DModel, SoteDiffusionV3JointTransformerBlock, SoteDiffusionV3SingleTransformerBlock, SoteDiffusionV3ConvTransformer2DBlock, SoteDiffusionV3LinearTransformer1DBlock # noqa:F401
+from .sotev3_transformer import SoteDiffusionV3Transformer2DModel, SoteDiffusionV3JointTransformerBlock, SoteDiffusionV3ConditionalTransformerBlock, SoteDiffusionV3ConvTransformer2DBlock, SoteDiffusionV3LinearTransformer1DBlock # noqa:F401
 from .sotev3_embedder import SoteDiffusionV3PosEmbed1D, SoteDiffusionV3PosEmbed2D # noqa:F401
 from .sotev3_atten import SoteDiffusionV3AttnProcessor2_0, SoteDiffusionV3CrossAttnProcessor2_0 # noqa:F401
 from .sotev3_pipeline_output import SoteDiffusionV3PipelineOutput # noqa:F401
