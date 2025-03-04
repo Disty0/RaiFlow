@@ -737,9 +737,11 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = (noise_pred_text * self.guidance_scale) - (noise_pred_uncond * (self.guidance_scale - 1))
+                    #noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                     """
-                    if t == self.scheduler.config.num_train_timesteps and self.sotediffusion_guidence_base_shift != 0.0:
+                    current_sigma = self.scheduler.sigmas[self.scheduler.step_index or i]
+                    if t == self.scheduler.config.num_train_timesteps and self.sotediffusion_guidence_base_shift > 0:
                         # downscale cfg at the first step to fix everything becoming black issue
                         downscaled_guidance_scale = (self.guidance_scale / 2) / (self.sotediffusion_guidence_base_shift / self.scheduler.shift)
                     else:
@@ -755,7 +757,6 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                         noise_pred_uncond_cfg = noise_pred_uncond
                         x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale + self.guidance_scale
 
-                    current_sigma = self.scheduler.sigmas[self.scheduler.step_index or i]
                     x0_pred_text = latents - (noise_pred_text_cfg * current_sigma)
                     x0_pred_uncond = latents - (noise_pred_uncond_cfg * current_sigma)
 
