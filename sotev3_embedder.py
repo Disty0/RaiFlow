@@ -5,7 +5,7 @@ from diffusers.utils import logging
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-def SoteDiffusionV3PosEmbed1D(embeds: torch.Tensor, sigmas: torch.Tensor, secondary_seq_len: int, base_seq_len: int):
+def SoteDiffusionV3PosEmbed1D(embeds: torch.FloatTensor, sigmas: torch.FloatTensor, secondary_seq_len: int, base_seq_len: int) -> torch.FloatTensor:
     batch_size, seq_len, _ = embeds.shape
     device = embeds.device
     dtype = embeds.dtype
@@ -28,7 +28,7 @@ def SoteDiffusionV3PosEmbed1D(embeds: torch.Tensor, sigmas: torch.Tensor, second
     return posed_embeds
 
 
-def SoteDiffusionV3PosEmbed2D(latents: torch.FloatTensor, sigmas: torch.FloatTensor):
+def SoteDiffusionV3PosEmbed2D(latents: torch.FloatTensor) -> torch.FloatTensor:
     batch_size, _, height, width = latents.shape
     max_dim = max(width, height)
     device = latents.device

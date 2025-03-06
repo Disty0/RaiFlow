@@ -560,7 +560,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
 
         sigmas = timestep.to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
 
-        hidden_states = SoteDiffusionV3PosEmbed2D(latents=hidden_states, sigmas=sigmas)
+        hidden_states = SoteDiffusionV3PosEmbed2D(hidden_states)
         hidden_states = hidden_states.view(batch_size, (channels + 4), latents_seq_len).transpose(1,2)
 
         hidden_states = SoteDiffusionV3PosEmbed1D(
