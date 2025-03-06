@@ -209,6 +209,7 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         ff_mult: int = 4,
         dropout: float = 0.1,
         qk_norm: str = None,
+        in_channels: int = 392,
     ):
         super().__init__()
 
@@ -253,15 +254,16 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
 
         self.norm_ff = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
         self.norm_ff_secondary = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
+        self.norm_ff_original = nn.LayerNorm(in_channels, eps=eps, elementwise_affine=True)
 
         self.ff = nn.Sequential(
-            nn.Linear(dim*2, dim*ff_mult, bias=True),
+            nn.Linear(((dim*2)+in_channels), dim*ff_mult, bias=True),
             nn.GELU(approximate="tanh"),
             nn.Dropout(dropout),
             nn.Linear(dim*ff_mult, dim, bias=True),
         )
 
-    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, secondary_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, secondary_hidden_states: torch.FloatTensor, original_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         norm_hidden_states = self.norm_cross_attn(hidden_states)
         norm_encoder_hidden_states = self.norm_cross_attn_context(encoder_hidden_states)
         hidden_states = hidden_states + self.cross_attn(hidden_states=norm_hidden_states, encoder_hidden_states=norm_encoder_hidden_states)
@@ -271,8 +273,9 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
 
         norm_hidden_states = self.norm_ff(hidden_states)
         norm_secondary_hidden_states = self.norm_ff_secondary(secondary_hidden_states)
+        norm_original_hidden_states = self.norm_ff_original(original_hidden_states)
 
-        norm_hidden_states = torch.cat([norm_hidden_states, norm_secondary_hidden_states], dim=-1)
+        norm_hidden_states = torch.cat([norm_hidden_states, norm_secondary_hidden_states, norm_original_hidden_states], dim=-1)
         hidden_states = hidden_states + self.ff(norm_hidden_states)
 
         return hidden_states
@@ -324,6 +327,8 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         super().__init__()
         self.out_channels = out_channels if out_channels is not None else in_channels
         self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
+        self.in_channels = in_channels + 8 # pos channels
+        self.encoder_in_channels = encoder_in_channels + 4 # pos channels
 
         self.num_entagled_layers = min(self.config.num_eps_layers, self.config.num_x0_layers)
 
@@ -337,11 +342,11 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
             self.last_layer_type = "none"
             self.num_last_layers = 0
 
-        self.eps_embedder = nn.Linear((in_channels + 8), self.inner_dim, bias=True)
-        self.x0_embedder = nn.Linear((in_channels + 8), self.inner_dim, bias=True)
+        self.eps_embedder = nn.Linear(self.in_channels, self.inner_dim, bias=True)
+        self.x0_embedder = nn.Linear(self.in_channels, self.inner_dim, bias=True)
 
-        self.eps_context_embedder = nn.Linear((encoder_in_channels + 4), self.inner_dim, bias=True)
-        self.x0_context_embedder = nn.Linear((encoder_in_channels + 4), self.inner_dim, bias=True)
+        self.eps_context_embedder = nn.Linear(self.encoder_in_channels, self.inner_dim, bias=True)
+        self.x0_context_embedder = nn.Linear(self.encoder_in_channels, self.inner_dim, bias=True)
 
         self.eps_encoder_blocks = nn.ModuleList(
             [
@@ -383,6 +388,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     eps=eps,
                     dropout=dropout,
                     qk_norm=qk_norm,
+                    in_channels=self.in_channels,
                 )
                 for _ in range(self.config.num_eps_layers)
             ]
@@ -398,6 +404,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     eps=eps,
                     dropout=dropout,
                     qk_norm=qk_norm,
+                    in_channels=self.in_channels,
                 )
                 for _ in range(self.config.num_x0_layers)
             ]
@@ -616,23 +623,27 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     eps_hidden_states,
                     eps_encoder_hidden_states,
                     x0_hidden_states,
+                    hidden_states,
                 )
                 x0_hidden_states = self._gradient_checkpointing_func(
                     self.x0_transformer_blocks[index_block],
                     x0_hidden_states,
                     x0_encoder_hidden_states,
                     eps_hidden_states,
+                    hidden_states,
                 )
             else:
                 eps_hidden_states = self.eps_transformer_blocks[index_block](
                     hidden_states=eps_hidden_states,
                     encoder_hidden_states=eps_encoder_hidden_states,
                     secondary_hidden_states=x0_hidden_states,
+                    original_hidden_states=hidden_states,
                 )
                 x0_hidden_states = self.x0_transformer_blocks[index_block](
                     hidden_states=x0_hidden_states,
                     encoder_hidden_states=x0_encoder_hidden_states,
                     secondary_hidden_states=eps_hidden_states,
+                    original_hidden_states=hidden_states,
                 )
 
         if self.last_layer_type == "eps":
@@ -643,12 +654,14 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                         eps_hidden_states,
                         eps_encoder_hidden_states,
                         x0_hidden_states,
+                        hidden_states,
                     )
                 else:
                     eps_hidden_states = self.eps_transformer_blocks[index_block + self.num_entagled_layers](
                         hidden_states=eps_hidden_states,
                         encoder_hidden_states=eps_encoder_hidden_states,
                         secondary_hidden_states=x0_hidden_states,
+                        original_hidden_states=hidden_states,
                     )
         elif self.last_layer_type == "x0":
             for index_block in range(self.num_last_layers):
@@ -658,12 +671,14 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                         x0_hidden_states,
                         x0_encoder_hidden_states,
                         eps_hidden_states,
+                        hidden_states,
                     )
                 else:
                     x0_hidden_states = self.x0_transformer_blocks[index_block + self.num_entagled_layers](
                         hidden_states=x0_hidden_states,
                         encoder_hidden_states=x0_encoder_hidden_states,
                         secondary_hidden_states=eps_hidden_states,
+                        original_hidden_states=hidden_states,
                     )
 
         eps_pred = self.eps_unembedder(eps_hidden_states).transpose(1,2).view(batch_size, channels, height, width)
