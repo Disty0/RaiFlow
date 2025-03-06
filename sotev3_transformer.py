@@ -31,7 +31,7 @@ class SoteDiffusionV3SingleTransformer1DBlock(nn.Module):
         eps (`float`, *optional*, defaults to 0.1): The eps used with nn modules.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the linear feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "layer_norm"): The qk normalization to use in attention.
+        qk_norm (`str`, *optional*, defaults to None): The qk normalization to use in attention.
     """
 
     def __init__(
@@ -42,7 +42,7 @@ class SoteDiffusionV3SingleTransformer1DBlock(nn.Module):
         eps: float = 1e-05,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        qk_norm: str = "layer_norm",
+        qk_norm: str = None,
     ):
         super().__init__()
 
@@ -109,7 +109,7 @@ class SoteDiffusionV3EncoderTransformerBlock(nn.Module):
         eps (`float`, *optional*, defaults to 0.1): The eps used with nn modules.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the linear feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "layer_norm"): The qk normalization to use in attention.
+        qk_norm (`str`, *optional*, defaults to None): The qk normalization to use in attention.
     """
 
     def __init__(
@@ -120,7 +120,7 @@ class SoteDiffusionV3EncoderTransformerBlock(nn.Module):
         eps: float = 1e-05,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        qk_norm: str = "layer_norm",
+        qk_norm: str = None,
     ):
         super().__init__()
 
@@ -197,7 +197,7 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         eps (`float`, *optional*, defaults to 0.1): The eps used with nn modules.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the linear feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "layer_norm"): The qk normalization to use in attention.
+        qk_norm (`str`, *optional*, defaults to None): The qk normalization to use in attention.
     """
 
     def __init__(
@@ -208,7 +208,7 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         eps: float = 1e-05,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        qk_norm: str = "layer_norm",
+        qk_norm: str = None,
     ):
         super().__init__()
 
@@ -296,7 +296,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         eps (`float`, *optional*, defaults to 0.1): The eps used with nn modules.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the linear feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "layer_norm"): The qk normalization to use in attention.
+        qk_norm (`str`, *optional*, defaults to None): The qk normalization to use in attention.
     """
 
     _supports_gradient_checkpointing = True
@@ -319,7 +319,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         eps: float = 1e-05,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        qk_norm: str = "layer_norm",
+        qk_norm: str = None,
     ):
         super().__init__()
         self.out_channels = out_channels if out_channels is not None else in_channels
