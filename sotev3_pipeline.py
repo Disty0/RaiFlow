@@ -736,32 +736,33 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 # perform guidances
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = (noise_pred_text * self.guidance_scale) - (noise_pred_uncond * (self.guidance_scale - 1))
+                    #noise_pred = (noise_pred_text * self.guidance_scale) - (noise_pred_uncond * (self.guidance_scale - 1))
                     #noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-                    """
-                    current_sigma = self.scheduler.sigmas[self.scheduler.step_index or i]
-                    if t == self.scheduler.config.num_train_timesteps and self.sotediffusion_guidence_base_shift > 0:
-                        # downscale cfg at the first step to fix everything becoming black issue
-                        downscaled_guidance_scale = (self.guidance_scale / 2) / (self.sotediffusion_guidence_base_shift / self.scheduler.shift)
+                    if False and t <= self.scheduler.config.num_train_timesteps * 0.9:
+                        noise_pred = noise_pred_text
                     else:
-                        # halve the cfg scale because we are using double cfg
-                        downscaled_guidance_scale = self.guidance_scale / 2
+                        current_sigma = self.scheduler.sigmas[self.scheduler.step_index or i]
+                        if t == self.scheduler.config.num_train_timesteps and self.sotediffusion_guidence_base_shift > 0:
+                            # downscale cfg at the first step to fix everything becoming black issue
+                            downscaled_guidance_scale = (self.guidance_scale / 2) / (self.sotediffusion_guidence_base_shift / self.scheduler.shift)
+                        else:
+                            # halve the cfg scale because we are using double cfg
+                            downscaled_guidance_scale = self.guidance_scale / 2
 
-                    if downscaled_guidance_scale > 1:
-                        noise_pred_text_cfg = (noise_pred_text * downscaled_guidance_scale) - (noise_pred_uncond * (downscaled_guidance_scale - 1))
-                        noise_pred_uncond_cfg = (noise_pred_uncond * downscaled_guidance_scale) - (noise_pred_text * (downscaled_guidance_scale - 1))
-                        x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale
-                    else:
-                        noise_pred_text_cfg = noise_pred_text
-                        noise_pred_uncond_cfg = noise_pred_uncond
-                        x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale + self.guidance_scale
+                        if downscaled_guidance_scale > 1:
+                            noise_pred_text_cfg = (noise_pred_text * downscaled_guidance_scale) - (noise_pred_uncond * (downscaled_guidance_scale - 1))
+                            noise_pred_uncond_cfg = (noise_pred_uncond * downscaled_guidance_scale) - (noise_pred_text * (downscaled_guidance_scale - 1))
+                            x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale
+                        else:
+                            noise_pred_text_cfg = noise_pred_text
+                            noise_pred_uncond_cfg = noise_pred_uncond
+                            x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale + downscaled_guidance_scale
 
-                    x0_pred_text = latents - (noise_pred_text_cfg * current_sigma)
-                    x0_pred_uncond = latents - (noise_pred_uncond_cfg * current_sigma)
+                        x0_pred_text = latents - (noise_pred_text_cfg * current_sigma)
+                        x0_pred_uncond = latents - (noise_pred_uncond_cfg * current_sigma)
 
-                    noise_pred = noise_pred_text_cfg - x0_pred_guidance_scale * ((x0_pred_text - x0_pred_uncond) * current_sigma)
-                    """
+                        noise_pred = noise_pred_text_cfg - x0_pred_guidance_scale * ((x0_pred_text - x0_pred_uncond) * current_sigma)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
