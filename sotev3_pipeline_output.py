@@ -19,22 +19,3 @@ class SoteDiffusionV3PipelineOutput(BaseOutput):
     """
 
     images: Union[List[PIL.Image.Image], np.ndarray]
-
-
-@dataclass
-class SoteDiffusionV3Transformer2DModelOutput(BaseOutput):
-    """
-    The output of [`Transformer2DModel`].
-
-    Args:
-        sample (`torch.Tensor` of shape `(batch_size, num_channels, height, width)`.
-            The flowmatch prediction calculated from noise and latent.
-        noise (`torch.Tensor` of shape `(batch_size, num_channels, height, width)`.
-            The epsilon prediction output conditioned on the `encoder_hidden_states` input.
-        latent (`torch.Tensor` of shape `(batch_size, num_channels, height, width)`.
-            The x0 prediction output conditioned on the `encoder_hidden_states` input.
-    """
-
-    sample: "torch.Tensor"  # noqa: F821
-    noise: "torch.Tensor"  # noqa: F821
-    latent: "torch.Tensor"  # noqa: F821

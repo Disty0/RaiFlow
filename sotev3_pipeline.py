@@ -1,5 +1,5 @@
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 from transformers import (
@@ -169,58 +169,58 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         )
 
     def _get_qwen2_prompt_embeds(
-            self,
-            prompt: Union[str, List[str]] = None,
-            prompt_images: Optional[PipelineImageInput] = None,
-            max_sequence_length: int = 1024,
-            device: Optional[torch.device] = None,
-            dtype: Optional[torch.dtype] = None,
-        ):
-            device = device or self._execution_device
-            dtype = dtype or self.text_encoder.dtype
+        self,
+        prompt: Union[str, List[str]] = None,
+        prompt_images: Optional[PipelineImageInput] = None,
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+        max_sequence_length: int = 1024,
+    ) -> List[torch.FloatTensor]:
+        device = device or self._execution_device
+        dtype = dtype or self.text_encoder.dtype
 
-            prompt = [prompt] if isinstance(prompt, str) else prompt
+        prompt = [prompt] if isinstance(prompt, str) else prompt
 
-            if prompt_images is not None and not isinstance(prompt_images, list):
-                prompt_images = [prompt_images]
+        if prompt_images is not None and not isinstance(prompt_images, list):
+            prompt_images = [prompt_images]
 
-            inputs = self.tokenizer(
-                text=prompt.copy(), # tokenizer overwrites
-                images=prompt_images,
-                padding="max_length",
-                max_length=max_sequence_length,
-                truncation=True,
-                add_special_tokens=True,
-                return_tensors="pt"
+        inputs = self.tokenizer(
+            text=prompt.copy(), # tokenizer overwrites
+            images=prompt_images,
+            padding="max_length",
+            max_length=max_sequence_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_tensors="pt"
+        )
+
+        input_ids = inputs.input_ids
+        untruncated_ids = self.tokenizer(text=prompt.copy(), images=prompt_images, padding="longest", return_tensors="pt").input_ids
+
+        if untruncated_ids.shape[-1] >= input_ids.shape[-1] and not torch.equal(input_ids, untruncated_ids):
+            removed_text = self.tokenizer.batch_decode(untruncated_ids[:, max_sequence_length :])
+            logger.warning(
+                "The following part of your input was truncated because `max_sequence_length` is set to "
+                f" {max_sequence_length} tokens: {removed_text}"
             )
 
-            input_ids = inputs.input_ids
-            untruncated_ids = self.tokenizer(text=prompt.copy(), images=prompt_images, padding="longest", return_tensors="pt").input_ids
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        prompt_embeds = self.text_encoder(**inputs, output_hidden_states=True).hidden_states[-1]
+        prompt_embeds = prompt_embeds.to(device, dtype=dtype)
 
-            if untruncated_ids.shape[-1] >= input_ids.shape[-1] and not torch.equal(input_ids, untruncated_ids):
-                removed_text = self.tokenizer.batch_decode(untruncated_ids[:, max_sequence_length :])
-                logger.warning(
-                    "The following part of your input was truncated because `max_sequence_length` is set to "
-                    f" {max_sequence_length} tokens: {removed_text}"
-                )
+        attention_mask = inputs["attention_mask"].to(device, dtype=dtype)
+        prompt_embeds = prompt_embeds * attention_mask.unsqueeze(-1).expand(prompt_embeds.shape)
+        prompt_embeds_list = []
+        for i in range(prompt_embeds.size(0)):
+            count = 0
+            for j in reversed(attention_mask[i]):
+                if j == 0:
+                    break
+                count += 1
+            count = max(count,1)
+            prompt_embeds_list.append(prompt_embeds[i, -count:])
 
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-            prompt_embeds = self.text_encoder(**inputs, output_hidden_states=True).hidden_states[-1]
-            prompt_embeds = prompt_embeds.to(device, dtype=dtype)
-
-            attention_mask = inputs["attention_mask"].to(device, dtype=dtype)
-            prompt_embeds = prompt_embeds * attention_mask.unsqueeze(-1).expand(prompt_embeds.shape)
-            prompt_embeds_list = []
-            for i in range(prompt_embeds.size(0)):
-                count = 0
-                for j in reversed(attention_mask[i]):
-                    if j == 0:
-                        break
-                    count += 1
-                count = max(count,1)
-                prompt_embeds_list.append(prompt_embeds[i, -count:])
-
-            return prompt_embeds_list
+        return prompt_embeds_list
 
     def encode_prompt(
         self,
@@ -235,7 +235,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         max_sequence_length: int = 1024,
         min_sequence_length: int = 256,
-    ):
+    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
         r"""
 
         Args:
@@ -534,7 +534,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         max_sequence_length: int = 1024,
         min_sequence_length: int = 256,
         mu: Optional[float] = None,
-    ):
+    ) -> Union[SoteDiffusionV3PipelineOutput, Tuple[PipelineImageInput]]:
         r"""
         Function invoked when calling the pipeline for generation.
 
