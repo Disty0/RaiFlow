@@ -725,13 +725,14 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0])
 
-                noise_pred, eps_pred, x0_pred = self.transformer(
+                noise_pred = self.transformer(
                     hidden_states=latent_model_input,
                     timestep=timestep,
                     encoder_hidden_states=prompt_embeds,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
-                )
+                    flip_outputs=True,
+                )[0]
 
                 # perform guidances
                 if self.do_classifier_free_guidance:
