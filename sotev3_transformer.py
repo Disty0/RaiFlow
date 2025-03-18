@@ -245,7 +245,7 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         )
 
         self.norm_ff = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
-        self.norm_ff_secondary = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
+        self.norm_ff_temb = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
 
         self.ff = FeedForward(
             dim=dim*2,
@@ -256,7 +256,7 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
             bias=True
         )
 
-    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, secondary_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, temb: torch.FloatTensor) -> torch.FloatTensor:
         norm_hidden_states = self.norm_cross_attn(hidden_states)
         norm_encoder_hidden_states = self.norm_cross_attn_context(encoder_hidden_states)
         hidden_states = hidden_states + self.cross_attn(hidden_states=norm_hidden_states, encoder_hidden_states=norm_encoder_hidden_states)
@@ -265,9 +265,9 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None)
 
         norm_hidden_states = self.norm_ff(hidden_states)
-        norm_secondary_hidden_states = self.norm_ff_secondary(secondary_hidden_states)
+        norm_temb = self.norm_ff_temb(temb)
 
-        ff_hidden_states = torch.cat([norm_hidden_states, norm_secondary_hidden_states], dim=-1)
+        ff_hidden_states = torch.cat([norm_hidden_states, norm_temb], dim=-1)
         hidden_states = hidden_states + self.ff(ff_hidden_states)
 
         return hidden_states
@@ -317,11 +317,13 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         self.gradient_checkpointing = False
         self.out_channels = out_channels if out_channels is not None else in_channels
         self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
+        self.base_seq_len = self.config.sample_size * self.config.sample_size
         self.in_channels = in_channels + 8 # pos channels
         self.encoder_in_channels = encoder_in_channels + 4 # pos channels
 
-        self.embedder = FeedForward(
-            dim=self.in_channels,
+        self.timestep_embedder = nn.Linear(8, in_channels, bias=True)
+        self.temb_embedder = FeedForward(
+            dim=in_channels * 2, # pos is handled in temb
             dim_out=self.inner_dim,
             mult=self.config.ff_mult,
             dropout=dropout,
@@ -329,7 +331,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
             bias=True
         )
 
-        self.secondary_embedder = FeedForward(
+        self.embedder = FeedForward(
             dim=self.in_channels,
             dim_out=self.inner_dim,
             mult=self.config.ff_mult,
@@ -439,27 +441,50 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         latents_seq_len = height * width
 
         sigmas = timestep.to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
+        sigmas = sigmas.view(batch_size, 1, 1)
 
-        hidden_states = SoteDiffusionV3PosEmbed2D(hidden_states)
-        hidden_states = hidden_states.view(batch_size, (channels + 4), latents_seq_len).transpose(1,2)
-
-        hidden_states = SoteDiffusionV3PosEmbed1D(
-            embeds=hidden_states,
-            sigmas=sigmas,
-            secondary_seq_len=encoder_hidden_states.shape[1],
-            base_seq_len=(self.config.sample_size*self.config.sample_size)
+        posed_latents_2d = SoteDiffusionV3PosEmbed2D(
+            shape=hidden_states.shape,
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
         )
 
-        secondary_hidden_states = self.secondary_embedder(hidden_states)
+        posed_latents_1d = SoteDiffusionV3PosEmbed1D(
+            shape=(batch_size, latents_seq_len, channels),
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+            secondary_seq_len=encoder_hidden_states.shape[1],
+            base_seq_len=self.base_seq_len,
+            sigmas=sigmas,
+        )
+
+        temb = posed_latents_2d.view(batch_size, 4, latents_seq_len).transpose(1,2)
+        temb = torch.cat([temb, posed_latents_1d], dim=2)
+        temb = self.timestep_embedder(temb)
+        temb = torch.cat(
+            [
+                hidden_states.view(batch_size, channels, latents_seq_len).transpose(1,2),
+                temb,
+            ],
+            dim=2,
+        )
+        temb = self.temb_embedder(temb)
+
+        hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
+        hidden_states = hidden_states.view(batch_size, (channels + 4), latents_seq_len).transpose(1,2)
+        hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
         hidden_states = self.embedder(hidden_states)
 
-        encoder_hidden_states = SoteDiffusionV3PosEmbed1D(
-            embeds=encoder_hidden_states,
-            sigmas=sigmas,
+        posed_encoder_1d = SoteDiffusionV3PosEmbed1D(
+            shape=encoder_hidden_states.shape,
+            device=encoder_hidden_states.device,
+            dtype=hidden_states.dtype,
             secondary_seq_len=latents_seq_len,
-            base_seq_len=self.config.encoder_base_seq_len
+            base_seq_len=self.config.encoder_base_seq_len,
+            sigmas=sigmas,
         )
 
+        encoder_hidden_states = torch.cat([encoder_hidden_states, posed_encoder_1d], dim=2)
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
         for index_block, block in enumerate(self.joint_transformer_blocks):
@@ -481,13 +506,13 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     block,
                     hidden_states,
                     encoder_hidden_states,
-                    secondary_hidden_states,
+                    temb,
                 )
             else:
                 hidden_states = block(
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
-                    secondary_hidden_states=secondary_hidden_states,
+                    temb=temb,
                 )
 
         output = self.unembedder(hidden_states).transpose(1,2).view(batch_size, channels, height, width)
