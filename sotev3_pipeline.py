@@ -801,6 +801,9 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 if XLA_AVAILABLE:
                     xm.mark_step()
 
+        # Offload all models before decoding
+        self.maybe_free_model_hooks()
+
         if output_type == "latent":
             image = latents
         elif getattr(self, "vae", None) is not None:
