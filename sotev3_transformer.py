@@ -15,7 +15,7 @@ from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 
 from .sotev3_atten import SoteDiffusionV3AttnProcessor2_0, SoteDiffusionV3CrossAttnProcessor2_0
-from .sotev3_embedder import SoteDiffusionV3PosEmbed1D, SoteDiffusionV3PosEmbed2D
+from .sotev3_embedder import SoteDiffusionV3PosEmbed1D, SoteDiffusionV3PosEmbed2D, pack_2d_latents_to_1d, unpack_1d_latents_to_2d
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -201,7 +201,6 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         ff_mult: int = 4,
         dropout: float = 0.1,
         qk_norm: str = "layer_norm",
-        in_channels: int = 392,
     ):
         super().__init__()
 
@@ -298,8 +297,8 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
     @register_to_config
     def __init__(
         self,
-        sample_size: int = 64,
-        in_channels: int = 384,
+        sample_size: int = 128,
+        in_channels: int = 16,
         num_joint_layers: int = 4,
         num_layers: int = 24,
         attention_head_dim: int = 64,
@@ -308,6 +307,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         encoder_base_seq_len: int = 1024,
         num_train_timesteps: int = 1000,
         out_channels: int = None,
+        patch_size: int = 2,
         eps: float = 1e-05,
         ff_mult: int = 4,
         dropout: float = 0.1,
@@ -316,14 +316,15 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         super().__init__()
         self.gradient_checkpointing = False
         self.out_channels = out_channels if out_channels is not None else in_channels
+        self.out_channels = self.out_channels * self.config.patch_size*self.config.patch_size
         self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
-        self.base_seq_len = self.config.sample_size * self.config.sample_size
-        self.in_channels = in_channels + 8 # pos channels
+        self.base_seq_len = (self.config.sample_size // self.config.patch_size) * (self.config.sample_size // self.config.patch_size)
+        self.in_channels = 4 + ((in_channels + 4) * self.config.patch_size*self.config.patch_size) # patched + pos channels
         self.encoder_in_channels = encoder_in_channels + 4 # pos channels
 
-        self.timestep_embedder = nn.Linear(8, in_channels, bias=True)
+        self.timestep_embedder = nn.Linear(4 + (4 * self.config.patch_size*self.config.patch_size), self.in_channels, bias=True)
         self.temb_embedder = FeedForward(
-            dim=in_channels * 2, # pos is handled in temb
+            dim=self.in_channels * 2,
             dim_out=self.inner_dim,
             mult=self.config.ff_mult,
             dropout=dropout,
@@ -374,7 +375,6 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     eps=eps,
                     dropout=dropout,
                     qk_norm=qk_norm,
-                    in_channels=self.in_channels,
                 )
                 for _ in range(self.config.num_layers)
             ]
@@ -399,11 +399,11 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         flip_outputs: bool = True,
     ) -> Union[Transformer2DModelOutput, Tuple[torch.FloatTensor]]:
         """
-        The [`SD3Transformer2DModel`] forward method.
+        The [`SoteDiffusionV3Transformer2DModel`] forward method.
 
         Args:
             hidden_states (`torch.FloatTensor` of shape `(batch_size, dim, height, width)`):
-                JPEG latent input.
+                The latent input.
             encoder_hidden_states (`torch.FloatTensor` of shape `(batch size, sequence_len, embed_dims)`):
                 Conditional embeddings (embeddings computed from the input conditions such as prompts) to use.
             timestep (`torch.LongTensor`):
@@ -438,7 +438,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                 )
 
         batch_size, channels, height, width = hidden_states.shape
-        latents_seq_len = height * width
+        latents_seq_len = (height // self.config.patch_size) * (width // self.config.patch_size)
 
         sigmas = timestep.to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
         sigmas = sigmas.view(batch_size, 1, 1)
@@ -450,7 +450,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         )
 
         posed_latents_1d = SoteDiffusionV3PosEmbed1D(
-            shape=(batch_size, latents_seq_len, channels),
+            shape=(batch_size, latents_seq_len, (channels*self.config.patch_size*self.config.patch_size)),
             device=hidden_states.device,
             dtype=hidden_states.dtype,
             secondary_seq_len=encoder_hidden_states.shape[1],
@@ -458,21 +458,16 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
             sigmas=sigmas,
         )
 
-        temb = posed_latents_2d.view(batch_size, 4, latents_seq_len).transpose(1,2)
+        hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
+        hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.config.patch_size)
+        hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
+
+        temb = pack_2d_latents_to_1d(posed_latents_2d, patch_size=self.config.patch_size)
         temb = torch.cat([temb, posed_latents_1d], dim=2)
         temb = self.timestep_embedder(temb)
-        temb = torch.cat(
-            [
-                hidden_states.view(batch_size, channels, latents_seq_len).transpose(1,2),
-                temb,
-            ],
-            dim=2,
-        )
-        temb = self.temb_embedder(temb)
+        temb = torch.cat([hidden_states, temb], dim=2)
 
-        hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
-        hidden_states = hidden_states.view(batch_size, (channels + 4), latents_seq_len).transpose(1,2)
-        hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
+        temb = self.temb_embedder(temb)
         hidden_states = self.embedder(hidden_states)
 
         posed_encoder_1d = SoteDiffusionV3PosEmbed1D(
@@ -515,7 +510,8 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     temb=temb,
                 )
 
-        output = self.unembedder(hidden_states).transpose(1,2).view(batch_size, channels, height, width)
+        output = self.unembedder(hidden_states)
+        output = unpack_1d_latents_to_2d(output, patch_size=self.config.patch_size, original_height=height, original_widht=width)
 
         if flip_outputs: # latents - noise to noise - latents
             output = -output

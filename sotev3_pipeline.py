@@ -2,12 +2,8 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
-from transformers import (
-    Qwen2VLForConditionalGeneration,
-    Qwen2VLProcessor,
-)
 
-from diffusers.image_processor import PipelineImageInput
+from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils import (
     is_torch_xla_available,
@@ -18,8 +14,10 @@ from diffusers.utils import (
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
+from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+from diffusers.models.autoencoders import AutoencoderKL
+
 from .sotev3_transformer import SoteDiffusionV3Transformer2DModel
-from .sotev3_image_encoder import SoteV3ImageEncoder
 from .sotev3_pipeline_output import SoteDiffusionV3PipelineOutput
 
 
@@ -131,8 +129,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             Conditional Transformer (EMMDit) architecture to denoise the encoded image latents.
         scheduler ([`FlowMatchEulerDiscreteScheduler`]):
             A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
-        image_encoder ([`SoteV3ImageEncoder`]):
-            Sote Diffusion V3 JPEG encoder to encode and decode images to and from latent representations.
+        vae ([`AutoencoderKL`]):
+            Variational Auto-Encoder (VAE) Model to encode and decode images to and from latent representations.
         text_encoder ([`Qwen2VLForConditionalGeneration`]):
             [Qwen2VLForConditionalGeneration](https://huggingface.co/docs/transformers/main/model_doc/qwen2_vl#transformers.Qwen2VLForConditionalGeneration),
             specifically the [2B](https://huggingface.co/Qwen/Qwen2-VL-2B) variant.
@@ -141,31 +139,36 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             [Qwen2VLProcessor](https://huggingface.co/docs/transformers/main/model_doc/qwen2_vl#transformers.Qwen2VLProcessor).
     """
 
-    model_cpu_offload_seq = "text_encoder->transformer"
+    model_cpu_offload_seq = "text_encoder->transformer->vae"
     _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds", "noise_pred"]
 
     def __init__(
         self,
         transformer: SoteDiffusionV3Transformer2DModel,
         scheduler: FlowMatchEulerDiscreteScheduler,
-        image_encoder: SoteV3ImageEncoder,
+        vae: AutoencoderKL,
         text_encoder: Qwen2VLForConditionalGeneration,
         tokenizer: Qwen2VLProcessor,
     ):
         super().__init__()
 
         self.register_modules(
-            image_encoder=image_encoder,
-            text_encoder=text_encoder,
-            tokenizer=tokenizer,
             transformer=transformer,
             scheduler=scheduler,
+            vae=vae,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
         )
+        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1) if getattr(self, "vae", None) else 8
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
 
         self.default_sample_size = (
             self.transformer.config.sample_size
             if hasattr(self, "transformer") and self.transformer is not None
             else 128
+        )
+        self.patch_size = (
+            self.transformer.config.patch_size if hasattr(self, "transformer") and self.transformer is not None else 2
         )
 
     def _get_qwen2_prompt_embeds(
@@ -393,12 +396,12 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         min_sequence_length=None,
     ):
         if (
-            height % self.image_encoder.config.block_size != 0
-            or width % self.image_encoder.config.block_size != 0
+            height % (self.vae_scale_factor * self.patch_size) != 0
+            or width % (self.vae_scale_factor * self.patch_size) != 0
         ):
             raise ValueError(
-                f"`height` and `width` have to be divisible by {self.image_encoder.config.block_size} but are {height} and {width}."
-                f"You can use height {height - height % (self.image_encoder.config.block_size)} and width {width - width % (self.image_encoder.config.block_size)}."
+                f"`height` and `width` have to be divisible by {self.vae_scale_factor * self.patch_size} but are {height} and {width}."
+                f"You can use height {height - height % (self.vae_scale_factor * self.patch_size)} and width {width - width % (self.vae_scale_factor * self.patch_size)}."
             )
 
         if callback_on_step_end_tensor_inputs is not None and not all(
@@ -461,8 +464,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         shape = (
             batch_size,
             num_channels_latents,
-            int(height) // self.image_encoder.block_size,
-            int(width) // self.image_encoder.block_size,
+            int(height) // self.vae_scale_factor,
+            int(width) // self.vae_scale_factor,
         )
 
         if isinstance(generator, list) and len(generator) != batch_size:
@@ -471,7 +474,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+        latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype).to(device, dtype=dtype) # xpu return float32
 
         return latents
 
@@ -619,8 +622,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
             `tuple`. When returning a tuple, the first element is a list with the generated images.
         """
 
-        height = height or self.default_sample_size * self.image_encoder.config.block_size #self.vae_scale_factor
-        width = width or self.default_sample_size * self.image_encoder.config.block_size #self.vae_scale_factor
+        height = height or self.default_sample_size * self.vae_scale_factor
+        width = width or self.default_sample_size * self.vae_scale_factor
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
@@ -713,6 +716,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         )
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
+        latents_dtype = latents.dtype
 
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -732,7 +736,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
                     flip_outputs=True,
-                )[0]
+                )[0].float()
 
                 # perform guidances
                 if self.do_classifier_free_guidance:
@@ -765,13 +769,9 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     """
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents_dtype = latents.dtype
-                latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
-
-                if latents.dtype != latents_dtype:
-                    if torch.backends.mps.is_available():
-                        # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
-                        latents = latents.to(latents_dtype)
+                latents = self.scheduler.step(noise_pred, t.float(), latents.float(), return_dict=False)[0]
+                latents = latents.to(latents_dtype)
+                noise_pred = noise_pred.to(latents_dtype) # for callback
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -793,9 +793,15 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         if output_type == "latent":
             image = latents
         else:
-            if latents.device.type == "xpu":
-                latents = latents.to("cpu")
-            image = self.image_encoder.decode(latents, return_type=output_type)
+            latents = (latents.float() / self.vae.config.scaling_factor) + self.vae.config.shift_factor
+            if self.vae.config.force_upcast and latents_dtype == torch.float16:
+                self.vae = self.vae.to(dtype=torch.float32)
+                image = self.vae.decode(latents, return_dict=False)[0]
+                self.vae = self.vae.to(dtype=latents_dtype)
+            else:
+                latents = latents.to(latents_dtype)
+                image = self.vae.decode(latents, return_dict=False)[0]
+            image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models
         self.maybe_free_model_hooks()
