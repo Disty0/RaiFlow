@@ -244,8 +244,6 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         )
 
         self.norm_ff = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
-        self.norm_ff_temb = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
-
         self.ff = FeedForward(
             dim=dim*2,
             dim_out=dim,
@@ -264,9 +262,7 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None)
 
         norm_hidden_states = self.norm_ff(hidden_states)
-        norm_temb = self.norm_ff_temb(temb)
-
-        ff_hidden_states = torch.cat([norm_hidden_states, norm_temb], dim=-1)
+        ff_hidden_states = torch.cat([norm_hidden_states, temb], dim=-1)
         hidden_states = hidden_states + self.ff(ff_hidden_states)
 
         return hidden_states
@@ -381,7 +377,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         )
 
         self.unembedder = FeedForward(
-            dim=self.inner_dim,
+            dim=self.inner_dim * 2,
             dim_out=self.out_channels,
             mult=self.config.ff_mult,
             dropout=dropout,
@@ -510,6 +506,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
                     temb=temb,
                 )
 
+        hidden_states = torch.cat([hidden_states, temb], dim=-1)
         output = self.unembedder(hidden_states)
         output = unpack_1d_latents_to_2d(output, patch_size=self.config.patch_size, original_height=height, original_widht=width)
 
