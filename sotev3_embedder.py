@@ -22,7 +22,6 @@ def SoteDiffusionV3PosEmbed1D(shape: Union[torch.Size, Tuple[int]], device: torc
     posed_embeds = posed_embeds.unsqueeze(0).repeat(batch_size, 1, 1)
 
     posed_embeds = torch.cat([posed_embeds, posed_embeds_ch2, posed_embeds_ch3], dim=2)
-
     return posed_embeds
 
 
@@ -46,7 +45,6 @@ def SoteDiffusionV3PosEmbed2D(shape: Union[torch.Size, Tuple[int]], device: torc
     # stack and repeat
     posed_latents = torch.stack([posed_latents_ch0, posed_latents_ch1, posed_latents_ch2, posed_latents_ch3], dim=0) # (4, height, width)
     posed_latents = posed_latents.unsqueeze(0).repeat(batch_size, 1, 1, 1) # (batch_size, 4, height, width)
-
     return posed_latents
 
 
@@ -72,5 +70,4 @@ def unpack_1d_latents_to_2d(latents: torch.FloatTensor, patch_size: int, origina
 
         latents = latents.permute(0, 3, 1, 4, 2, 5)
         latents = latents.reshape(batch_size, (channels // (patch_size * patch_size)), original_height, original_widht)
-
         return latents
