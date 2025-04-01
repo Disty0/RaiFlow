@@ -11,6 +11,7 @@ from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscal
 
 from diffusers.models.attention_processor import Attention
 from diffusers.models.attention import FeedForward
+from diffusers.models.normalization import RMSNorm
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 
@@ -54,7 +55,7 @@ class SoteDiffusionV3SingleTransformer1DBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
-        self.norm = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
+
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -66,10 +67,10 @@ class SoteDiffusionV3SingleTransformer1DBlock(nn.Module):
             processor=processor,
             dropout=dropout,
             qk_norm=qk_norm,
+            elementwise_affine=True,
             eps=eps,
         )
 
-        self.norm_ff = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
         self.ff = FeedForward(
             dim=dim,
             dim_out=dim,
@@ -80,11 +81,8 @@ class SoteDiffusionV3SingleTransformer1DBlock(nn.Module):
         )
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        norm_hidden_states = self.norm(hidden_states)
-        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None)
-
-        norm_hidden_states = self.norm_ff(hidden_states)
-        hidden_states = hidden_states + self.ff(norm_hidden_states)
+        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None)
+        hidden_states = hidden_states + self.ff(hidden_states)
 
         return hidden_states
 
@@ -123,9 +121,6 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
-        self.norm = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
-        self.norm_context = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
-
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -138,6 +133,7 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
             processor=processor,
             dropout=dropout,
             qk_norm=qk_norm,
+            elementwise_affine=True,
             eps=eps,
         )
 
@@ -163,10 +159,7 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
 
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        norm_hidden_states = self.norm(hidden_states)
-        norm_encoder_hidden_states = self.norm_context(encoder_hidden_states)
-
-        attn_output, context_attn_output = self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=norm_encoder_hidden_states)
+        attn_output, context_attn_output = self.attn(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
 
         hidden_states = hidden_states + attn_output
         encoder_hidden_states = encoder_hidden_states + context_attn_output
@@ -212,8 +205,6 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
-        self.norm_cross_attn = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
-        self.norm_cross_attn_context = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
         self.cross_attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -225,10 +216,10 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
             processor=cross_processor,
             dropout=dropout,
             qk_norm=qk_norm,
+            elementwise_affine=True,
             eps=eps,
         )
 
-        self.norm_attn = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -240,10 +231,10 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
             processor=processor,
             dropout=dropout,
             qk_norm=qk_norm,
+            elementwise_affine=True,
             eps=eps,
         )
 
-        self.norm_ff = nn.LayerNorm(dim, eps=eps, elementwise_affine=True)
         self.ff = FeedForward(
             dim=dim*2,
             dim_out=dim,
@@ -254,15 +245,10 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         )
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, temb: torch.FloatTensor) -> torch.FloatTensor:
-        norm_hidden_states = self.norm_cross_attn(hidden_states)
-        norm_encoder_hidden_states = self.norm_cross_attn_context(encoder_hidden_states)
-        hidden_states = hidden_states + self.cross_attn(hidden_states=norm_hidden_states, encoder_hidden_states=norm_encoder_hidden_states)
+        hidden_states = hidden_states + self.cross_attn(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
+        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None)
 
-        norm_hidden_states = self.norm_attn(hidden_states)
-        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None)
-
-        norm_hidden_states = self.norm_ff(hidden_states)
-        ff_hidden_states = torch.cat([norm_hidden_states, temb], dim=-1)
+        ff_hidden_states = torch.cat([hidden_states, temb], dim=-1)
         hidden_states = hidden_states + self.ff(ff_hidden_states)
 
         return hidden_states
@@ -337,8 +323,9 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
             bias=True
         )
 
+        self.context_norm = RMSNorm(encoder_in_channels, eps=eps, elementwise_affine=True)
         self.context_embedder = FeedForward(
-            dim=self.encoder_in_channels,
+            dim=self.encoder_in_channels, # dim + pos
             dim_out=self.inner_dim,
             mult=self.config.ff_mult,
             dropout=dropout,
@@ -475,6 +462,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
             sigmas=sigmas,
         )
 
+        encoder_hidden_states = self.context_norm(encoder_hidden_states)
         encoder_hidden_states = torch.cat([encoder_hidden_states, posed_encoder_1d], dim=2)
         encoder_hidden_states = self.context_embedder(encoder_hidden_states)
 
