@@ -3,7 +3,7 @@ from .raiflow_embedder import RaiFlowPosEmbed1D, RaiFlowPosEmbed2D # noqa:F401
 from .raiflow_atten import RaiFlowAttnProcessor2_0, RaiFlowCrossAttnProcessor2_0 # noqa:F401
 from .raiflow_pipeline_output import RaiFlowPipelineOutput # noqa:F401
 from .raiflow_pipeline import RaiFlowPipeline # noqa:F401
-from .raiflow_image_encoder import raiflowImageEncoder # noqa:F401
+from .raiflow_image_encoder import RaiFlowImageEncoder # noqa:F401
 
 
 # diffusers fails to load the models without these:
