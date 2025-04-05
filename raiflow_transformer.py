@@ -15,16 +15,16 @@ from diffusers.models.normalization import RMSNorm
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 
-from .sotev3_atten import SoteDiffusionV3AttnProcessor2_0, SoteDiffusionV3CrossAttnProcessor2_0
-from .sotev3_embedder import SoteDiffusionV3PosEmbed1D, SoteDiffusionV3PosEmbed2D, pack_2d_latents_to_1d, unpack_1d_latents_to_2d
+from .raiflow_atten import RaiFlowAttnProcessor2_0, RaiFlowCrossAttnProcessor2_0
+from .raiflow_embedder import RaiFlowPosEmbed1D, RaiFlowPosEmbed2D, pack_2d_latents_to_1d, unpack_1d_latents_to_2d
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 @maybe_allow_in_graph
-class SoteDiffusionV3SingleTransformerBlock(nn.Module):
+class RaiFlowSingleTransformerBlock(nn.Module):
     r"""
-    A Single Transformer block as part of the Sote Diffusion V3 MMDit architecture.
+    A Single Transformer block as part of the RaiFlow MMDit architecture.
 
     Parameters:
         dim (`int`): The number of channels in the input and output.
@@ -49,7 +49,7 @@ class SoteDiffusionV3SingleTransformerBlock(nn.Module):
         super().__init__()
 
         if hasattr(F, "scaled_dot_product_attention"):
-            processor = SoteDiffusionV3AttnProcessor2_0()
+            processor = RaiFlowAttnProcessor2_0()
         else:
             raise ValueError(
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
@@ -88,9 +88,9 @@ class SoteDiffusionV3SingleTransformerBlock(nn.Module):
 
 
 @maybe_allow_in_graph
-class SoteDiffusionV3JointTransformerBlock(nn.Module):
+class RaiFlowJointTransformerBlock(nn.Module):
     r"""
-    A Joint Transformer block as part of the Sote Diffusion V3 MMDit architecture.
+    A Joint Transformer block as part of the RaiFlow MMDit architecture.
 
     Parameters:
         dim (`int`): The number of channels in the input and output.
@@ -115,7 +115,7 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
         super().__init__()
 
         if hasattr(F, "scaled_dot_product_attention"):
-            processor = SoteDiffusionV3AttnProcessor2_0()
+            processor = RaiFlowAttnProcessor2_0()
         else:
             raise ValueError(
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
@@ -137,7 +137,7 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
             eps=eps,
         )
 
-        self.encoder_transformer = SoteDiffusionV3SingleTransformerBlock(
+        self.encoder_transformer = RaiFlowSingleTransformerBlock(
             dim=dim,
             num_attention_heads=num_attention_heads,
             attention_head_dim=attention_head_dim,
@@ -147,7 +147,7 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
             qk_norm=qk_norm,
         )
 
-        self.latent_transformer = SoteDiffusionV3SingleTransformerBlock(
+        self.latent_transformer = RaiFlowSingleTransformerBlock(
             dim=dim,
             num_attention_heads=num_attention_heads,
             attention_head_dim=attention_head_dim,
@@ -171,9 +171,9 @@ class SoteDiffusionV3JointTransformerBlock(nn.Module):
 
 
 @maybe_allow_in_graph
-class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
+class RaiFlowConditionalTransformer2DBlock(nn.Module):
     r"""
-    A Conditional Transformer block as part of the Sote Diffusion V3 MMDit architecture.
+    A Conditional Transformer block as part of the RaiFlow MMDit architecture.
 
     Parameters:
         dim (`int`): The number of channels in the input and output.
@@ -198,8 +198,8 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         super().__init__()
 
         if hasattr(F, "scaled_dot_product_attention"):
-            cross_processor = SoteDiffusionV3CrossAttnProcessor2_0()
-            processor = SoteDiffusionV3AttnProcessor2_0()
+            cross_processor = RaiFlowCrossAttnProcessor2_0()
+            processor = RaiFlowAttnProcessor2_0()
         else:
             raise ValueError(
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
@@ -254,9 +254,9 @@ class SoteDiffusionV3ConditionalTransformer2DBlock(nn.Module):
         return hidden_states
 
 
-class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
+class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     """
-    The Multi Modal Convoluted Transformer model introduced in Sote Diffusion 3.
+    The Multi Modal Convoluted Transformer model introduced in RaiFlow.
 
     Parameters:
         sample_size (`int`): The width of the latent images. This is fixed during training since
@@ -335,7 +335,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
 
         self.joint_transformer_blocks = nn.ModuleList(
             [
-                SoteDiffusionV3JointTransformerBlock(
+                RaiFlowJointTransformerBlock(
                     dim=self.inner_dim,
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
@@ -350,7 +350,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
 
         self.transformer_blocks = nn.ModuleList(
             [
-                SoteDiffusionV3ConditionalTransformer2DBlock(
+                RaiFlowConditionalTransformer2DBlock(
                     dim=self.inner_dim,
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
@@ -382,7 +382,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         flip_outputs: bool = True,
     ) -> Union[Transformer2DModelOutput, Tuple[torch.FloatTensor]]:
         """
-        The [`SoteDiffusionV3Transformer2DModel`] forward method.
+        The [`RaiFlowTransformer2DModel`] forward method.
 
         Args:
             hidden_states (`torch.FloatTensor` of shape `(batch_size, dim, height, width)`):
@@ -426,13 +426,13 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         sigmas = timestep.to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
         sigmas = sigmas.view(batch_size, 1, 1)
 
-        posed_latents_2d = SoteDiffusionV3PosEmbed2D(
+        posed_latents_2d = RaiFlowPosEmbed2D(
             shape=hidden_states.shape,
             device=hidden_states.device,
             dtype=hidden_states.dtype,
         )
 
-        posed_latents_1d = SoteDiffusionV3PosEmbed1D(
+        posed_latents_1d = RaiFlowPosEmbed1D(
             shape=(batch_size, latents_seq_len, (channels*self.config.patch_size*self.config.patch_size)),
             device=hidden_states.device,
             dtype=hidden_states.dtype,
@@ -453,7 +453,7 @@ class SoteDiffusionV3Transformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixi
         temb = self.temb_embedder(temb)
         hidden_states = self.embedder(hidden_states)
 
-        posed_encoder_1d = SoteDiffusionV3PosEmbed1D(
+        posed_encoder_1d = RaiFlowPosEmbed1D(
             shape=encoder_hidden_states.shape,
             device=encoder_hidden_states.device,
             dtype=hidden_states.dtype,

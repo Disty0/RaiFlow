@@ -8,9 +8,9 @@ from diffusers.utils import BaseOutput
 
 
 @dataclass
-class SoteDiffusionV3PipelineOutput(BaseOutput):
+class RaiFlowPipelineOutput(BaseOutput):
     """
-    Output class for Sote Diffusion V3 pipelines.
+    Output class for RaiFlow pipelines.
 
     Args:
         images (`List[PIL.Image.Image]` or `np.ndarray`)

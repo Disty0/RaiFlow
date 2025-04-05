@@ -16,10 +16,10 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
 from diffusers.models.autoencoders import AutoencoderKL
-from .sotev3_image_encoder import SoteV3ImageEncoder
+from .raiflow_image_encoder import RaiFlowImageEncoder
 
-from .sotev3_transformer import SoteDiffusionV3Transformer2DModel
-from .sotev3_pipeline_output import SoteDiffusionV3PipelineOutput
+from .raiflow_transformer import RaiFlowTransformer2DModel
+from .raiflow_pipeline_output import RaiFlowPipelineOutput
 
 
 if is_torch_xla_available():
@@ -36,15 +36,15 @@ EXAMPLE_DOC_STRING = """
     Examples:
         ```py
         >>> import torch
-        >>> from diffusers import SoteDiffusionV3Pipeline
+        >>> from diffusers import RaiFlowPipeline
 
-        >>> pipe = SoteDiffusionV3Pipeline.from_pretrained(
-        ...     "Disty0/SoteDiffusionV3", torch_dtype=torch.float16
+        >>> pipe = RaiFlowPipeline.from_pretrained(
+        ...     "Disty0/RaiFlow", torch_dtype=torch.float16
         ... )
         >>> pipe.to("cuda")
         >>> prompt = "A cat holding a sign that says hello world"
         >>> image = pipe(prompt).images[0]
-        >>> image.save("sotev3.png")
+        >>> image.save("raiflow.png")
         ```
 """
 
@@ -123,10 +123,10 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-class SoteDiffusionV3Pipeline(DiffusionPipeline):
+class RaiFlowPipeline(DiffusionPipeline):
     r"""
     Args:
-        transformer ([`SoteDiffusionV3Transformer2DModel`]):
+        transformer ([`RaiFlowTransformer2DModel`]):
             Conditional Transformer (EMMDit) architecture to denoise the encoded image latents.
         scheduler ([`FlowMatchEulerDiscreteScheduler`]):
             A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
@@ -136,8 +136,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         tokenizer (`Qwen2VLProcessor`):
             Tokenizer of class
             [Qwen2VLProcessor](https://huggingface.co/docs/transformers/main/model_doc/qwen2_vl#transformers.Qwen2VLProcessor).
-        image_encoder ([`SoteV3ImageEncoder`], *optional*):
-            Sote Diffusion V3 JPEG encoder to encode and decode images to and from latent representations.
+        image_encoder ([`RaiFlowImageEncoder`], *optional*):
+            RaiFlow JPEG encoder to encode and decode images to and from latent representations.
         vae ([`AutoencoderKL`], *optional*):
             Variational Auto-Encoder (VAE) Model to encode and decode images to and from latent representations.
     """
@@ -148,11 +148,11 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
 
     def __init__(
         self,
-        transformer: SoteDiffusionV3Transformer2DModel,
+        transformer: RaiFlowTransformer2DModel,
         scheduler: FlowMatchEulerDiscreteScheduler,
         text_encoder: Qwen2VLForConditionalGeneration,
         tokenizer: Qwen2VLProcessor,
-        image_encoder: SoteV3ImageEncoder = None,
+        image_encoder: RaiFlowImageEncoder = None,
         vae: AutoencoderKL = None,
     ):
         super().__init__()
@@ -494,12 +494,12 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         return self._guidance_scale
 
     @property
-    def sotediffusion_x0_pred_guidance_scale(self):
-        return self._sotediffusion_x0_pred_guidance_scale
+    def raiflow_x0_pred_guidance_scale(self):
+        return self._raiflow_x0_pred_guidance_scale
 
     @property
-    def sotediffusion_guidence_base_shift(self):
-        return self._sotediffusion_guidence_base_shift
+    def raiflow_guidence_base_shift(self):
+        return self._raiflow_guidence_base_shift
 
     # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
     # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
@@ -531,8 +531,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         num_inference_steps: int = 28,
         sigmas: Optional[List[float]] = None,
         guidance_scale: float = 5.0,
-        sotediffusion_x0_pred_guidance_scale: float = 1.0,
-        sotediffusion_guidence_base_shift: float = 4.0,
+        raiflow_x0_pred_guidance_scale: float = 1.0,
+        raiflow_guidence_base_shift: float = 4.0,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         negative_prompt_images: Optional[PipelineImageInput] = None,
         num_images_per_prompt: Optional[int] = 1,
@@ -548,7 +548,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         max_sequence_length: int = 1024,
         min_sequence_length: int = 256,
         mu: Optional[float] = None,
-    ) -> Union[SoteDiffusionV3PipelineOutput, Tuple[PipelineImageInput]]:
+    ) -> Union[RaiFlowPipelineOutput, Tuple[PipelineImageInput]]:
         r"""
         Function invoked when calling the pipeline for generation.
 
@@ -575,9 +575,9 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
                 1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
                 usually at the expense of lower image quality.
-            sotediffusion_x0_pred_guidance_scale (`float`, *optional*, defaults to 4.0):
+            raiflow_x0_pred_guidance_scale (`float`, *optional*, defaults to 4.0):
                 Guidance scale used for classifier free guidence via the final image predictions.
-            sotediffusion_guidence_base_shift (`float`, *optional*, defaults to 4.0):
+            raiflow_guidence_base_shift (`float`, *optional*, defaults to 4.0):
                 Base shift used to scale the cfg value on the first timestep.
             negative_prompt (`str` or `List[str]`, *optional*):
                 The prompt or prompts not to guide the image generation. If not defined, one has to pass
@@ -606,7 +606,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                 The output format of the generate image. Choose between
                 [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
             return_dict (`bool`, *optional*, defaults to `True`):
-                Whether or not to return a [`~pipelines.sote_diffusion_v3.SoteDiffusionV3PipelineOutput`] instead of
+                Whether or not to return a [`~pipelines.raiflow.RaiFlowPipelineOutput`] instead of
                 a plain tuple.
             joint_attention_kwargs (`dict`, *optional*):
                 A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
@@ -628,8 +628,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         Examples:
 
         Returns:
-            [`~pipelines.sote_diffusion_v3.SoteDiffusionV3PipelineOutput`] or `tuple`:
-            [`~pipelines.sote_diffusion_v3.SoteDiffusionV3PipelineOutput`] if `return_dict` is True, otherwise a
+            [`~pipelines.raiflow.RaiFlowPipelineOutput`] or `tuple`:
+            [`~pipelines.raiflow.RaiFlowPipelineOutput`] if `return_dict` is True, otherwise a
             `tuple`. When returning a tuple, the first element is a list with the generated images.
         """
 
@@ -652,8 +652,8 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         )
 
         self._guidance_scale = guidance_scale
-        self._sotediffusion_guidence_base_shift = sotediffusion_guidence_base_shift
-        self._sotediffusion_x0_pred_guidance_scale = sotediffusion_x0_pred_guidance_scale
+        self._raiflow_guidence_base_shift = raiflow_guidence_base_shift
+        self._raiflow_x0_pred_guidance_scale = raiflow_x0_pred_guidance_scale
 
         self._joint_attention_kwargs = joint_attention_kwargs
         self._interrupt = False
@@ -746,7 +746,7 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     encoder_hidden_states=prompt_embeds,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
-                    flip_outputs=True,
+                    return_flow_pred=True,
                 )[0].float()
 
                 # perform guidances
@@ -757,9 +757,9 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
 
                     """
                     current_sigma = self.scheduler.sigmas[self.scheduler.step_index or i]
-                    if t == self.scheduler.config.num_train_timesteps and self.sotediffusion_guidence_base_shift > 0:
+                    if t == self.scheduler.config.num_train_timesteps and self.raiflow_guidence_base_shift > 0:
                         # downscale cfg at the first step to fix everything becoming black issue
-                        downscaled_guidance_scale = (self.guidance_scale / 2) / (self.sotediffusion_guidence_base_shift / self.scheduler.shift)
+                        downscaled_guidance_scale = (self.guidance_scale / 2) / (self.raiflow_guidence_base_shift / self.scheduler.shift)
                     else:
                         # halve the cfg scale because we are using double cfg
                         downscaled_guidance_scale = self.guidance_scale / 2
@@ -767,11 +767,11 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
                     if downscaled_guidance_scale > 1:
                         noise_pred_text_cfg = (noise_pred_text * downscaled_guidance_scale) - (noise_pred_uncond * (downscaled_guidance_scale - 1))
                         noise_pred_uncond_cfg = (noise_pred_uncond * downscaled_guidance_scale) - (noise_pred_text * (downscaled_guidance_scale - 1))
-                        x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale
+                        x0_pred_guidance_scale = self.raiflow_x0_pred_guidance_scale
                     else:
                         noise_pred_text_cfg = noise_pred_text
                         noise_pred_uncond_cfg = noise_pred_uncond
-                        x0_pred_guidance_scale = self.sotediffusion_x0_pred_guidance_scale + downscaled_guidance_scale
+                        x0_pred_guidance_scale = self.raiflow_x0_pred_guidance_scale + downscaled_guidance_scale
 
                     x0_pred_text = latents - (noise_pred_text_cfg * current_sigma)
                     x0_pred_uncond = latents - (noise_pred_uncond_cfg * current_sigma)
@@ -829,4 +829,4 @@ class SoteDiffusionV3Pipeline(DiffusionPipeline):
         if not return_dict:
             return (image,)
 
-        return SoteDiffusionV3PipelineOutput(images=image)
+        return RaiFlowPipelineOutput(images=image)

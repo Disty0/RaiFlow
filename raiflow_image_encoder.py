@@ -91,7 +91,7 @@ def decode_jpeg_tensor(jpeg_img: torch.FloatTensor, block_size: int=16, cbcr_dow
     return torch.stack([y,cb,cr], dim=1)
 
 
-class SoteV3ImageEncoder(ImageProcessingMixin, ConfigMixin):
+class RaiFlowImageEncoder(ImageProcessingMixin, ConfigMixin):
 
     config_name = CONFIG_NAME
 
@@ -113,7 +113,7 @@ class SoteV3ImageEncoder(ImageProcessingMixin, ConfigMixin):
 
     def encode(self, images: PipelineImageInput, device: str="cpu") -> torch.FloatTensor:
         """
-        Encode RGB 0-255 image to SoteV3 Latents.
+        Encode RGB 0-255 image to RaiFlow Latents.
 
         Args:
             image (`PIL.Image.Image`, `np.ndarray` or `torch.Tensor`):
@@ -122,7 +122,7 @@ class SoteV3ImageEncoder(ImageProcessingMixin, ConfigMixin):
 
         Returns:
             `torch.Tensor`:
-                The encoded SoteV3 Latents.
+                The encoded RaiFlow Latents.
         """
 
         if isinstance(images, list):

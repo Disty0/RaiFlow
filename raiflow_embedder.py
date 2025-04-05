@@ -7,7 +7,7 @@ from diffusers.utils import logging
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-def SoteDiffusionV3PosEmbed1D(shape: Union[torch.Size, Tuple[int]], device: torch.device, dtype: torch.dtype, secondary_seq_len: int, base_seq_len: int, sigmas: torch.FloatTensor) -> torch.FloatTensor:
+def RaiFlowPosEmbed1D(shape: Union[torch.Size, Tuple[int]], device: torch.device, dtype: torch.dtype, secondary_seq_len: int, base_seq_len: int, sigmas: torch.FloatTensor) -> torch.FloatTensor:
     batch_size, seq_len, _ = shape
     ones = torch.ones((batch_size, seq_len, 1), device=device, dtype=dtype)
 
@@ -25,7 +25,7 @@ def SoteDiffusionV3PosEmbed1D(shape: Union[torch.Size, Tuple[int]], device: torc
     return posed_embeds
 
 
-def SoteDiffusionV3PosEmbed2D(shape: Union[torch.Size, Tuple[int]], device: torch.device, dtype: torch.dtype) -> torch.FloatTensor:
+def RaiFlowPosEmbed2D(shape: Union[torch.Size, Tuple[int]], device: torch.device, dtype: torch.dtype) -> torch.FloatTensor:
     batch_size, _, height, width = shape
     max_dim = max(width, height)
 

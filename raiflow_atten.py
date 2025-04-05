@@ -4,12 +4,12 @@ import torch.nn.functional as F
 from diffusers.models.attention_processor import Attention
 
 
-class SoteDiffusionV3AttnProcessor2_0:
-    """Attention processor used in processing the Sote Diffusion V3 self-attention projections."""
+class RaiFlowAttnProcessor2_0:
+    """Attention processor used in processing the RaiFlow self-attention projections."""
 
     def __init__(self):
         if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError("SoteDiffusionV3AttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
+            raise ImportError("RaiFlowAttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
 
     def __call__(
         self,
@@ -89,12 +89,12 @@ class SoteDiffusionV3AttnProcessor2_0:
             return attn_output
 
 
-class SoteDiffusionV3CrossAttnProcessor2_0:
-    """Attention processor used in processing the Sote Diffusion V3 cross-attention projections."""
+class RaiFlowCrossAttnProcessor2_0:
+    """Attention processor used in processing the RaiFlow cross-attention projections."""
 
     def __init__(self):
         if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError("SoteDiffusionV3CrossAttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
+            raise ImportError("RaiFlowCrossAttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
 
     def __call__(
         self,
