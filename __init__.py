@@ -5,6 +5,8 @@ from .raiflow_pipeline_output import RaiFlowPipelineOutput # noqa:F401
 from .raiflow_pipeline import RaiFlowPipeline # noqa:F401
 from .raiflow_image_encoder import RaiFlowImageEncoder # noqa:F401
 
+from .dynamic_tanh import DynamicTanh # noqa:F401
+
 
 # diffusers fails to load the models without these:
 from diffusers.models.modeling_utils import ModelMixin # noqa:F401

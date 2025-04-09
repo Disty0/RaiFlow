@@ -746,7 +746,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                     encoder_hidden_states=prompt_embeds,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
-                    return_flow_pred=True,
+                    flip_target=True,
                 )[0].float()
 
                 # perform guidances

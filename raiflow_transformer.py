@@ -15,6 +15,7 @@ from diffusers.models.normalization import RMSNorm
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 
+from .dynamic_tanh import DynamicTanh
 from .raiflow_atten import RaiFlowAttnProcessor2_0, RaiFlowCrossAttnProcessor2_0
 from .raiflow_embedder import RaiFlowPosEmbed1D, RaiFlowPosEmbed2D, pack_2d_latents_to_1d, unpack_1d_latents_to_2d
 
@@ -56,6 +57,7 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             )
 
 
+        self.norm_attn = DynamicTanh(dim=dim, init_alpha=0.5, elementwise_affine=True, bias=True)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -66,11 +68,15 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             bias=True,
             processor=processor,
             dropout=dropout,
-            qk_norm=qk_norm,
+            qk_norm=qk_norm if qk_norm != "dynamic_tanh" else None,
             elementwise_affine=True,
             eps=eps,
         )
+        if qk_norm == "dynamic_tanh":
+            self.attn.norm_q = DynamicTanh(dim=attention_head_dim, init_alpha=0.5, elementwise_affine=False, bias=False)
+            self.attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.5, elementwise_affine=False, bias=False)
 
+        self.norm_ff = DynamicTanh(dim=dim, init_alpha=0.5, elementwise_affine=True, bias=True)
         self.ff = FeedForward(
             dim=dim,
             dim_out=dim,
@@ -81,8 +87,8 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         )
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None)
-        hidden_states = hidden_states + self.ff(hidden_states)
+        hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None)
+        hidden_states = hidden_states + self.ff(self.norm_ff(hidden_states))
 
         return hidden_states
 
@@ -121,6 +127,9 @@ class RaiFlowJointTransformerBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
+        self.norm_attn = DynamicTanh(dim=dim, init_alpha=0.5, elementwise_affine=True, bias=True)
+        self.norm_attn_context = DynamicTanh(dim=dim, init_alpha=0.5, elementwise_affine=True, bias=True)
+
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -132,10 +141,15 @@ class RaiFlowJointTransformerBlock(nn.Module):
             bias=True,
             processor=processor,
             dropout=dropout,
-            qk_norm=qk_norm,
+            qk_norm=qk_norm if qk_norm != "dynamic_tanh" else None,
             elementwise_affine=True,
             eps=eps,
         )
+        if qk_norm == "dynamic_tanh":
+            self.attn.norm_q = DynamicTanh(dim=attention_head_dim, init_alpha=0.5, elementwise_affine=False, bias=False)
+            self.attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.5, elementwise_affine=False, bias=False)
+            self.attn.norm_added_q = DynamicTanh(dim=attention_head_dim, init_alpha=0.5, elementwise_affine=False, bias=False)
+            self.attn.norm_added_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.5, elementwise_affine=False, bias=False)
 
         self.encoder_transformer = RaiFlowSingleTransformerBlock(
             dim=dim,
@@ -159,7 +173,10 @@ class RaiFlowJointTransformerBlock(nn.Module):
 
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        attn_output, context_attn_output = self.attn(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
+        attn_output, context_attn_output = self.attn(
+            hidden_states=self.norm_attn(hidden_states),
+            encoder_hidden_states=self.norm_attn_context(encoder_hidden_states),
+        )
 
         hidden_states = hidden_states + attn_output
         encoder_hidden_states = encoder_hidden_states + context_attn_output
@@ -205,6 +222,9 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
+        self.norm_cross_attn = DynamicTanh(dim=dim, init_alpha=0.5, elementwise_affine=True, bias=True)
+        self.norm_cross_attn_context = DynamicTanh(dim=dim, init_alpha=0.5, elementwise_affine=True, bias=True)
+
         self.cross_attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -215,11 +235,15 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             bias=True,
             processor=cross_processor,
             dropout=dropout,
-            qk_norm=qk_norm,
+            qk_norm=qk_norm if qk_norm != "dynamic_tanh" else None,
             elementwise_affine=True,
             eps=eps,
         )
+        if qk_norm == "dynamic_tanh":
+            self.cross_attn.norm_q = DynamicTanh(dim=attention_head_dim, init_alpha=0.5, elementwise_affine=False, bias=False)
+            self.cross_attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.5, elementwise_affine=False, bias=False)
 
+        self.norm_attn = DynamicTanh(dim=dim, init_alpha=0.5, elementwise_affine=True, bias=True)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -230,11 +254,15 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             bias=True,
             processor=processor,
             dropout=dropout,
-            qk_norm=qk_norm,
+            qk_norm=qk_norm if qk_norm != "dynamic_tanh" else None,
             elementwise_affine=True,
             eps=eps,
         )
+        if qk_norm == "dynamic_tanh":
+            self.attn.norm_q = DynamicTanh(dim=attention_head_dim, init_alpha=0.5, elementwise_affine=False, bias=False)
+            self.attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.5, elementwise_affine=False, bias=False)
 
+        self.norm_ff = DynamicTanh(dim=dim, init_alpha=0.5, elementwise_affine=True, bias=True)
         self.ff = FeedForward(
             dim=dim*2,
             dim_out=dim,
@@ -245,10 +273,17 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         )
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, temb: torch.FloatTensor) -> torch.FloatTensor:
-        hidden_states = hidden_states + self.cross_attn(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
-        hidden_states = hidden_states + self.attn(hidden_states=hidden_states, encoder_hidden_states=None)
+        hidden_states = hidden_states + self.cross_attn(
+            hidden_states=self.norm_cross_attn(hidden_states),
+            encoder_hidden_states=self.norm_cross_attn_context(encoder_hidden_states),
+        )
 
-        ff_hidden_states = torch.cat([hidden_states, temb], dim=-1)
+        hidden_states = hidden_states + self.attn(
+            hidden_states=self.norm_attn(hidden_states),
+            encoder_hidden_states=None,
+        )
+
+        ff_hidden_states = torch.cat([self.norm_ff(hidden_states), temb], dim=-1)
         hidden_states = hidden_states + self.ff(ff_hidden_states)
 
         return hidden_states
@@ -379,7 +414,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         timestep: torch.LongTensor = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
-        flip_outputs: bool = True,
+        flip_target: bool = True,
     ) -> Union[Transformer2DModelOutput, Tuple[torch.FloatTensor]]:
         """
         The [`RaiFlowTransformer2DModel`] forward method.
@@ -398,7 +433,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             return_dict (`bool`, *optional*, defaults to `True`):
                 Whether or not to return a [`~models.transformer_2d.Transformer2DModelOutput`] instead of a plain
                 tuple.
-            flip_outputs (`bool`, *optional*, defaults to `True`):
+            flip_target (`bool`, *optional*, defaults to `True`):
                 Whether or not to flip the outputs for inference.
 
         Returns:
@@ -498,7 +533,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         output = self.unembedder(hidden_states)
         output = unpack_1d_latents_to_2d(output, patch_size=self.config.patch_size, original_height=height, original_widht=width)
 
-        if flip_outputs: # latents - noise to noise - latents
+        if flip_target: # latents - noise to noise - latents
             output = -output
 
         if USE_PEFT_BACKEND:
