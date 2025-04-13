@@ -144,7 +144,7 @@ class RaiFlowPipeline(DiffusionPipeline):
 
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _optional_components = ["image_encoder", "vae"]
-    _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds", "noise_pred"]
+    _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds", "noise_pred", "encoder_hidden_states"]
 
     def __init__(
         self,
@@ -173,7 +173,7 @@ class RaiFlowPipeline(DiffusionPipeline):
         if getattr(self, "vae", None) is not None:
             self.latent_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
             self.image_processor = VaeImageProcessor(vae_scale_factor=self.latent_scale_factor * self.patch_size)
-        elif getattr(self, "image_processor", None) is not None:
+        elif getattr(self, "image_encoder", None) is not None:
             self.latent_scale_factor = self.image_encoder.config.block_size
         else:
             self.latent_scale_factor = 8
@@ -740,14 +740,15 @@ class RaiFlowPipeline(DiffusionPipeline):
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0])
 
-                noise_pred = self.transformer(
+                noise_pred, encoder_hidden_states = self.transformer(
                     hidden_states=latent_model_input,
                     timestep=timestep,
                     encoder_hidden_states=prompt_embeds,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
                     flip_target=True,
-                )[0].float()
+                )
+                noise_pred = noise_pred.float()
 
                 # perform guidances
                 if self.do_classifier_free_guidance:
@@ -827,6 +828,6 @@ class RaiFlowPipeline(DiffusionPipeline):
         self.maybe_free_model_hooks()
 
         if not return_dict:
-            return (image,)
+            return (image, encoder_hidden_states)
 
-        return RaiFlowPipelineOutput(images=image)
+        return RaiFlowPipelineOutput(images=image, encoder_hidden_states=encoder_hidden_states)
