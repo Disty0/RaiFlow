@@ -23,7 +23,7 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 class RaiFlowFeedForward(nn.Module):
-    def __init__(self, dim: int, out_dim: int, num_attention_heads: int, attention_head_dim: int, heads_per_expert: int = 4, proj_mult: int = 2, ff_mult: int = 4, dropout: float = 0.1):
+    def __init__(self, dim: int, out_dim: int, num_attention_heads: int, attention_head_dim: int, heads_per_expert: int = 2, proj_mult: int = 2, ff_mult: int = 4, dropout: float = 0.1):
         super().__init__()
         self.num_experts = num_attention_heads // heads_per_expert
         self.ff_dim = attention_head_dim * heads_per_expert * proj_mult
@@ -370,7 +370,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         num_layers: int = 24,
         attention_head_dim: int = 64,
         num_attention_heads: int = 32,
-        heads_per_expert: int = 4,
+        heads_per_expert: int = 2,
         encoder_in_channels: int = 1536,
         encoder_base_seq_len: int = 1024,
         num_train_timesteps: int = 1000,
