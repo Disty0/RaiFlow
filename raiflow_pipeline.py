@@ -219,7 +219,7 @@ class RaiFlowPipeline(DiffusionPipeline):
             )
 
         inputs = {k: v.to(device) for k, v in inputs.items()}
-        prompt_embeds = self.text_encoder(**inputs, output_hidden_states=True).hidden_states[-1]
+        prompt_embeds = self.text_encoder(**inputs, output_hidden_states=True).hidden_states[-2]
         prompt_embeds = prompt_embeds.to(device, dtype=dtype)
 
         attention_mask = inputs["attention_mask"].to(device, dtype=dtype)
