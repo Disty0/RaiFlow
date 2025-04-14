@@ -201,7 +201,7 @@ class RaiFlowPipeline(DiffusionPipeline):
         inputs = self.tokenizer(
             text=prompt.copy(), # tokenizer overwrites
             images=prompt_images,
-            padding="max_length",
+            padding="longest",
             max_length=max_sequence_length,
             truncation=True,
             add_special_tokens=True,
