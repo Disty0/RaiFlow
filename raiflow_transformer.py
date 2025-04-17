@@ -23,15 +23,16 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 class RaiFlowFeedForward(nn.Module):
-    def __init__(self, dim: int, out_dim: int, num_attention_heads: int, attention_head_dim: int, heads_per_expert: int = 2, proj_mult: int = 2, ff_mult: int = 4, dropout: float = 0.1):
+    def __init__(self, dim: int, out_dim: int, num_attention_heads: int, attention_head_dim: int, heads_per_expert: int = 2, router_mult: int = 2, ff_mult: int = 4, dropout: float = 0.1):
         super().__init__()
         self.num_experts = num_attention_heads // heads_per_expert
-        self.ff_dim = attention_head_dim * heads_per_expert * proj_mult
+        self.ff_dim = attention_head_dim * heads_per_expert * router_mult
         self.inner_dim = self.num_experts * self.ff_dim
 
         self.router = nn.Sequential(
             nn.Linear(dim, self.inner_dim, bias=True),
             nn.GELU(approximate='tanh'),
+            nn.Dropout(dropout),
         )
 
         self.experts = nn.ModuleList(
@@ -49,6 +50,7 @@ class RaiFlowFeedForward(nn.Module):
 
         self.proj_out = nn.Sequential(
             nn.GELU(approximate='tanh'),
+            nn.Dropout(dropout),
             nn.Linear(self.inner_dim, out_dim, bias=True),
         )
 
@@ -74,10 +76,10 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         num_attention_heads (`int`): The number of heads to use for multi-head attention.
         attention_head_dim (`int`): The number of channels in each head.
         eps (`float`, *optional*, defaults to 0.1): The eps used with nn modules.
-        proj_mult (`int`, *optional*, defaults to 4): The multiplier to use for the router feed forward hidden dimension.
+        router_mult (`int`, *optional*, defaults to 2): The multiplier to use for the router feed forward hidden dimension.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the expert feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "rms_norm"): The qk normalization to use in attention.
+        qk_norm (`str`, *optional*, defaults to "dynamic_tanh"): The qk normalization to use in attention.
     """
 
     def __init__(
@@ -87,10 +89,10 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         attention_head_dim: int,
         heads_per_expert: int,
         eps: float = 1e-05,
-        proj_mult: int = 2,
+        router_mult: int = 2,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        qk_norm: str = "rms_norm",
+        qk_norm: str = "dynamic_tanh",
     ):
         super().__init__()
 
@@ -127,7 +129,7 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             num_attention_heads=num_attention_heads,
             attention_head_dim=attention_head_dim,
             heads_per_expert=heads_per_expert,
-            proj_mult=proj_mult,
+            router_mult=router_mult,
             ff_mult=ff_mult,
             dropout=dropout,
         )
@@ -151,10 +153,10 @@ class RaiFlowJointTransformerBlock(nn.Module):
         num_attention_heads (`int`): The number of heads to use for multi-head attention.
         attention_head_dim (`int`): The number of channels in each head.
         eps (`float`, *optional*, defaults to 0.1): The eps used with nn modules.
-        proj_mult (`int`, *optional*, defaults to 4): The multiplier to use for the router feed forward hidden dimension.
+        router_mult (`int`, *optional*, defaults to 2): The multiplier to use for the router feed forward hidden dimension.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the expert feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "rms_norm"): The qk normalization to use in attention.
+        qk_norm (`str`, *optional*, defaults to "dynamic_tanh"): The qk normalization to use in attention.
     """
 
     def __init__(
@@ -164,10 +166,10 @@ class RaiFlowJointTransformerBlock(nn.Module):
         attention_head_dim: int,
         heads_per_expert: int,
         eps: float = 1e-05,
-        proj_mult: int = 2,
+        router_mult: int = 2,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        qk_norm: str = "rms_norm",
+        qk_norm: str = "dynamic_tanh",
     ):
         super().__init__()
 
@@ -247,10 +249,10 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         num_attention_heads (`int`): The number of heads to use for multi-head attention.
         attention_head_dim (`int`): The number of channels in each head.
         eps (`float`, *optional*, defaults to 0.1): The eps used with nn modules.
-        proj_mult (`int`, *optional*, defaults to 4): The multiplier to use for the router feed forward hidden dimension.
+        router_mult (`int`, *optional*, defaults to 2): The multiplier to use for the router feed forward hidden dimension.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the expert feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "rms_norm"): The qk normalization to use in attention.
+        qk_norm (`str`, *optional*, defaults to "dynamic_tanh"): The qk normalization to use in attention.
     """
 
     def __init__(
@@ -260,10 +262,10 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         attention_head_dim: int,
         heads_per_expert: int,
         eps: float = 1e-05,
-        proj_mult: int = 2,
+        router_mult: int = 2,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        qk_norm: str = "rms_norm",
+        qk_norm: str = "dynamic_tanh",
     ):
         super().__init__()
 
@@ -320,7 +322,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             num_attention_heads=num_attention_heads,
             attention_head_dim=attention_head_dim,
             heads_per_expert=heads_per_expert,
-            proj_mult=proj_mult,
+            router_mult=router_mult,
             ff_mult=ff_mult,
             dropout=dropout,
         )
@@ -353,10 +355,10 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         encoder_in_channels (`int`, *optional*, defaults to 1536): The number of `encoder_hidden_states` dimensions to use.
         out_channels (`int`, defaults to 384): Number of output channels.
         eps (`float`, *optional*, defaults to 0.1): The eps used with nn modules.
-        proj_mult (`int`, *optional*, defaults to 4): The multiplier to use for the router feed forward hidden dimension.
+        router_mult (`int`, *optional*, defaults to 2): The multiplier to use for the router feed forward hidden dimension.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the expert feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "rms_norm"): The qk normalization to use in attention.
+        qk_norm (`str`, *optional*, defaults to "dynamic_tanh"): The qk normalization to use in attention.
     """
 
     _supports_gradient_checkpointing = True
@@ -377,10 +379,10 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         out_channels: int = None,
         patch_size: int = 2,
         eps: float = 1e-05,
-        proj_mult: int = 2,
+        router_mult: int = 2,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        qk_norm: str = "rms_norm",
+        qk_norm: str = "dynamic_tanh",
     ):
         super().__init__()
         self.gradient_checkpointing = False
@@ -430,7 +432,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
                     heads_per_expert=self.config.heads_per_expert,
-                    proj_mult=self.config.proj_mult,
+                    router_mult=self.config.router_mult,
                     ff_mult=self.config.ff_mult,
                     eps=eps,
                     dropout=dropout,
@@ -447,7 +449,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
                     heads_per_expert=self.config.heads_per_expert,
-                    proj_mult=self.config.proj_mult,
+                    router_mult=self.config.router_mult,
                     ff_mult=self.config.ff_mult,
                     eps=eps,
                     dropout=dropout,
@@ -457,6 +459,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
+        self.norm_out = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
         self.unembedder = FeedForward(
             dim=self.inner_dim * 2,
             dim_out=self.out_channels,
@@ -592,6 +595,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     temb=temb,
                 )
 
+        hidden_states = self.norm_out(hidden_states)
         hidden_states = torch.cat([hidden_states, temb], dim=-1)
         output = self.unembedder(hidden_states)
         output = unpack_1d_latents_to_2d(output, patch_size=self.config.patch_size, original_height=height, original_widht=width)
