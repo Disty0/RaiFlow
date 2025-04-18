@@ -1,7 +1,9 @@
+from typing import Optional, Tuple
 import torch
 import torch.nn.functional as F
 
 from diffusers.models.attention_processor import Attention
+from diffusers.models.embeddings import apply_rotary_emb
 
 
 class RaiFlowAttnProcessor2_0:
@@ -15,7 +17,8 @@ class RaiFlowAttnProcessor2_0:
         self,
         attn: Attention,
         hidden_states: torch.FloatTensor,
-        encoder_hidden_states: torch.FloatTensor = None,
+        encoder_hidden_states: Optional[torch.FloatTensor] = None,
+        rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         *args,
         **kwargs,
     ) -> torch.FloatTensor:
@@ -65,6 +68,10 @@ class RaiFlowAttnProcessor2_0:
             query = torch.cat([encoder_hidden_states_query_proj, query], dim=2)
             key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
             value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
+
+        if rotary_emb is not None:
+            query = apply_rotary_emb(query, rotary_emb)
+            key = apply_rotary_emb(key, rotary_emb)
 
         attn_output = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
         attn_output = attn_output.transpose(1, 2).reshape(batch_size, total_seq_len, attn_heads * head_dim)

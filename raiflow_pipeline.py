@@ -18,6 +18,7 @@ from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
 from diffusers.models.autoencoders import AutoencoderKL
 from .raiflow_image_encoder import RaiFlowImageEncoder
 
+from .raiflow_embedder import prepare_latent_image_ids
 from .raiflow_transformer import RaiFlowTransformer2DModel
 from .raiflow_pipeline_output import RaiFlowPipelineOutput
 
@@ -540,6 +541,8 @@ class RaiFlowPipeline(DiffusionPipeline):
         latents: Optional[torch.FloatTensor] = None,
         prompt_embeds: Optional[torch.FloatTensor] = None,
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
+        combined_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
+        image_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
@@ -701,10 +704,12 @@ class RaiFlowPipeline(DiffusionPipeline):
             latents,
         )
 
+        _, _, latent_height, latent_width = latents.shape
+        _, encoder_seq_len, _ = prompt_embeds.shape
+
         # 5. Prepare timesteps
         scheduler_kwargs = {}
         if self.scheduler.config.get("use_dynamic_shifting", None) and mu is None:
-            _, _, latent_height, latent_width = latents.shape
             image_seq_len = latent_height * latent_width
             mu = calculate_shift(
                 image_seq_len,
@@ -729,6 +734,14 @@ class RaiFlowPipeline(DiffusionPipeline):
         self._num_timesteps = len(timesteps)
         latents_dtype = latents.dtype
 
+        if combined_rotary_emb is None:
+            txt_ids = torch.zeros((encoder_seq_len,3), device=prompt_embeds.device, dtype=prompt_embeds.dtype) 
+            img_ids = prepare_latent_image_ids(latent_height, latent_width, latents.device, latents.dtype)
+            pos_ids = torch.cat((txt_ids, img_ids), dim=0)
+            combined_rotary_emb = self.transformer.pos_embed(pos_ids, freqs_dtype=torch.float32)
+        if image_rotary_emb is None:
+            image_rotary_emb = (combined_rotary_emb[0][encoder_seq_len :], combined_rotary_emb[1][encoder_seq_len :])
+
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -742,8 +755,10 @@ class RaiFlowPipeline(DiffusionPipeline):
 
                 noise_pred, encoder_hidden_states = self.transformer(
                     hidden_states=latent_model_input,
-                    timestep=timestep,
                     encoder_hidden_states=prompt_embeds,
+                    timestep=timestep,
+                    combined_rotary_emb=combined_rotary_emb,
+                    image_rotary_emb=image_rotary_emb,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
                     flip_target=True,

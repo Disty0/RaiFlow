@@ -16,7 +16,7 @@ from diffusers.models.modeling_utils import ModelMixin
 
 from .dynamic_tanh import DynamicTanh
 from .raiflow_atten import RaiFlowAttnProcessor2_0, RaiFlowCrossAttnProcessor2_0
-from .raiflow_embedder import RaiFlowPosEmbed1D, RaiFlowPosEmbed2D, pack_2d_latents_to_1d, unpack_1d_latents_to_2d
+from .raiflow_embedder import RaiFlowPosEmbed1D, RaiFlowPosEmbed2D, pack_2d_latents_to_1d, unpack_1d_latents_to_2d, prepare_latent_image_ids, FluxPosEmbed
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -134,9 +134,9 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             dropout=dropout,
         )
 
-    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, hidden_states: torch.FloatTensor, rotary_emb: Optional[Tuple[torch.FloatTensor]] = None) -> torch.FloatTensor:
         norm_hidden_states = self.norm_attn(hidden_states)
-        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None)
+        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None, rotary_emb=rotary_emb)
 
         norm_hidden_states = self.norm_ff(hidden_states)
         hidden_states = hidden_states + self.ff(norm_hidden_states)
@@ -226,16 +226,16 @@ class RaiFlowJointTransformerBlock(nn.Module):
         )
 
 
-    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, combined_rotary_emb: Tuple[torch.FloatTensor], image_rotary_emb: Tuple[torch.FloatTensor]) -> torch.FloatTensor:
         norm_hidden_states = self.norm_attn(hidden_states)
         norm_encoder_hidden_states = self.norm_attn_context(encoder_hidden_states)
 
-        attn_output, context_attn_output = self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=norm_encoder_hidden_states)
+        attn_output, context_attn_output = self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=norm_encoder_hidden_states, rotary_emb=combined_rotary_emb)
         hidden_states = hidden_states + attn_output
         encoder_hidden_states = encoder_hidden_states + context_attn_output
 
-        hidden_states = self.latent_transformer(hidden_states)
-        encoder_hidden_states = self.encoder_transformer(encoder_hidden_states)
+        hidden_states = self.latent_transformer(hidden_states, rotary_emb=image_rotary_emb)
+        encoder_hidden_states = self.encoder_transformer(encoder_hidden_states, rotary_emb=None)
         return hidden_states, encoder_hidden_states
 
 
@@ -327,15 +327,15 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             dropout=dropout,
         )
 
-    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, temb: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, image_rotary_emb: Tuple[torch.FloatTensor], skip_connect: torch.FloatTensor) -> torch.FloatTensor:
         norm_hidden_states = self.norm_cross_attn(hidden_states)
         hidden_states = hidden_states + self.cross_attn(hidden_states=norm_hidden_states, encoder_hidden_states=encoder_hidden_states)
 
         norm_hidden_states = self.norm_attn(hidden_states)
-        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None)
+        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None, rotary_emb=image_rotary_emb)
 
         norm_hidden_states = self.norm_ff(hidden_states)
-        ff_hidden_states = torch.cat([norm_hidden_states, temb], dim=-1)
+        ff_hidden_states = torch.cat([norm_hidden_states, skip_connect], dim=-1)
         hidden_states = hidden_states + self.ff(ff_hidden_states)
         return hidden_states
 
@@ -383,6 +383,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         ff_mult: int = 4,
         dropout: float = 0.1,
         qk_norm: str = "dynamic_tanh",
+        axes_dims_rope = (16, 24, 24),
     ):
         super().__init__()
         self.gradient_checkpointing = False
@@ -393,8 +394,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.in_channels = 4 + ((in_channels + 4) * self.config.patch_size*self.config.patch_size) # patched + pos channels
         self.encoder_in_channels = encoder_in_channels + 4 # pos channels
 
+        self.pos_embed = FluxPosEmbed(theta=10000, axes_dim=self.config.axes_dims_rope)
         self.timestep_embedder = nn.Linear(4 + (4 * self.config.patch_size*self.config.patch_size), self.in_channels, bias=True)
-        self.temb_embedder = FeedForward(
+        self.skip_connect_embedder = FeedForward(
             dim=self.in_channels * 2,
             dim_out=self.inner_dim,
             mult=self.config.ff_mult,
@@ -422,7 +424,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             bias=True
         )
 
-        self.norm_temb = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.norm_skip_connect = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
         self.norm_context = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
 
         self.joint_transformer_blocks = nn.ModuleList(
@@ -472,8 +474,10 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     def forward(
         self,
         hidden_states: torch.FloatTensor,
-        encoder_hidden_states: torch.FloatTensor = None,
+        encoder_hidden_states: torch.FloatTensor,
         timestep: torch.LongTensor = None,
+        combined_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
+        image_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
         flip_target: bool = True,
@@ -519,6 +523,16 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         batch_size, channels, height, width = hidden_states.shape
         latents_seq_len = (height // self.config.patch_size) * (width // self.config.patch_size)
+        encoder_seq_len = encoder_hidden_states.shape[1]
+
+        if combined_rotary_emb is None:
+            txt_ids = torch.zeros((encoder_seq_len,3), device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype) 
+            img_ids = prepare_latent_image_ids(height, width, hidden_states.device, hidden_states.dtype)
+            pos_ids = torch.cat((txt_ids, img_ids), dim=0)
+            combined_rotary_emb = self.pos_embed(pos_ids, freqs_dtype=torch.float32)
+
+        if image_rotary_emb is None:
+            image_rotary_emb = (combined_rotary_emb[0][encoder_seq_len :], combined_rotary_emb[1][encoder_seq_len :])
 
         sigmas = timestep.to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
         sigmas = sigmas.view(batch_size, 1, 1)
@@ -542,13 +556,13 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.config.patch_size)
         hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
 
-        temb = pack_2d_latents_to_1d(posed_latents_2d, patch_size=self.config.patch_size)
-        temb = torch.cat([temb, posed_latents_1d], dim=2)
-        temb = self.timestep_embedder(temb)
-        temb = torch.cat([hidden_states, temb], dim=2)
+        skip_connect = pack_2d_latents_to_1d(posed_latents_2d, patch_size=self.config.patch_size)
+        skip_connect = torch.cat([skip_connect, posed_latents_1d], dim=2)
+        skip_connect = self.timestep_embedder(skip_connect)
+        skip_connect = torch.cat([hidden_states, skip_connect], dim=2)
 
-        temb = self.temb_embedder(temb)
-        temb = self.norm_temb(temb)
+        skip_connect = self.skip_connect_embedder(skip_connect)
+        skip_connect = self.norm_skip_connect(skip_connect)
 
         hidden_states = self.embedder(hidden_states)
 
@@ -571,11 +585,15 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     block,
                     hidden_states,
                     encoder_hidden_states,
+                    combined_rotary_emb,
+                    image_rotary_emb,
                 )
             else:
                 hidden_states, encoder_hidden_states = block(
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
+                    combined_rotary_emb=combined_rotary_emb,
+                    image_rotary_emb=image_rotary_emb,
                 )
 
         encoder_hidden_states = self.norm_context(encoder_hidden_states)
@@ -586,17 +604,19 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     block,
                     hidden_states,
                     encoder_hidden_states,
-                    temb,
+                    image_rotary_emb,
+                    skip_connect,
                 )
             else:
                 hidden_states = block(
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
-                    temb=temb,
+                    image_rotary_emb=image_rotary_emb,
+                    skip_connect=skip_connect,
                 )
 
         hidden_states = self.norm_out(hidden_states)
-        hidden_states = torch.cat([hidden_states, temb], dim=-1)
+        hidden_states = torch.cat([hidden_states, skip_connect], dim=-1)
         output = self.unembedder(hidden_states)
         output = unpack_1d_latents_to_2d(output, patch_size=self.config.patch_size, original_height=height, original_widht=width)
 
