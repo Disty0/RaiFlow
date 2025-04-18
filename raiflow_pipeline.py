@@ -734,13 +734,16 @@ class RaiFlowPipeline(DiffusionPipeline):
         self._num_timesteps = len(timesteps)
         latents_dtype = latents.dtype
 
+        img_ids = None
         if combined_rotary_emb is None:
             txt_ids = torch.zeros((encoder_seq_len,3), device=prompt_embeds.device, dtype=prompt_embeds.dtype) 
             img_ids = prepare_latent_image_ids(latent_height, latent_width, latents.device, latents.dtype)
-            pos_ids = torch.cat((txt_ids, img_ids), dim=0)
-            combined_rotary_emb = self.transformer.pos_embed(pos_ids, freqs_dtype=torch.float32)
+            combined_ids = torch.cat((txt_ids, img_ids), dim=0)
+            combined_rotary_emb = self.transformer.pos_embed(combined_ids, freqs_dtype=torch.float32)
         if image_rotary_emb is None:
-            image_rotary_emb = (combined_rotary_emb[0][encoder_seq_len :], combined_rotary_emb[1][encoder_seq_len :])
+            if img_ids is None:
+                img_ids = prepare_latent_image_ids(latent_height, latent_width, latents.device, latents.dtype)
+            image_rotary_emb = self.transformer.pos_embed(img_ids, freqs_dtype=torch.float32)
 
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:

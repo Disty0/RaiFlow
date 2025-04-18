@@ -525,14 +525,16 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         latents_seq_len = (height // self.config.patch_size) * (width // self.config.patch_size)
         encoder_seq_len = encoder_hidden_states.shape[1]
 
+        img_ids = None
         if combined_rotary_emb is None:
             txt_ids = torch.zeros((encoder_seq_len,3), device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype) 
             img_ids = prepare_latent_image_ids(height, width, hidden_states.device, hidden_states.dtype)
-            pos_ids = torch.cat((txt_ids, img_ids), dim=0)
-            combined_rotary_emb = self.pos_embed(pos_ids, freqs_dtype=torch.float32)
-
+            combined_ids = torch.cat((txt_ids, img_ids), dim=0)
+            combined_rotary_emb = self.pos_embed(combined_ids, freqs_dtype=torch.float32)
         if image_rotary_emb is None:
-            image_rotary_emb = (combined_rotary_emb[0][encoder_seq_len :], combined_rotary_emb[1][encoder_seq_len :])
+            if img_ids is None:
+                img_ids = prepare_latent_image_ids(height, width, hidden_states.device, hidden_states.dtype)
+            image_rotary_emb = self.pos_embed(img_ids, freqs_dtype=torch.float32)
 
         sigmas = timestep.to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
         sigmas = sigmas.view(batch_size, 1, 1)
