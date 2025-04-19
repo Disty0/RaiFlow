@@ -268,7 +268,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                 The prompt or prompts not to guide the image generation. If not defined, one has to pass
                 `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
                 less than `1`).
-            negative_prompt (`str` or `List[str]`, *optional*):
+            negative_prompt_images (`PipelineImageInput`, *optional*):
                 The image or images not to guide the image generation. If not defined, one has to pass
                 `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
                 less than `1`).
@@ -279,6 +279,8 @@ class RaiFlowPipeline(DiffusionPipeline):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
+            max_sequence_length (`int` defaults to 1024): Maximum sequence length to use with the `prompt`.
+            min_sequence_length (`int` defaults to 256): Minimum sequence length to use with the `prompt`.
         """
         device = device or self._execution_device
 
@@ -529,9 +531,9 @@ class RaiFlowPipeline(DiffusionPipeline):
         prompt_images: Optional[PipelineImageInput] = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
-        num_inference_steps: int = 28,
+        num_inference_steps: int = 30,
         sigmas: Optional[List[float]] = None,
-        guidance_scale: float = 5.0,
+        guidance_scale: float = 3.5,
         raiflow_x0_pred_guidance_scale: float = 1.0,
         raiflow_guidence_base_shift: float = 4.0,
         negative_prompt: Optional[Union[str, List[str]]] = None,
@@ -605,6 +607,10 @@ class RaiFlowPipeline(DiffusionPipeline):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
+            combined_rotary_emb (Tuple[`torch.FloatTensor`] of shape `(combined_sequence_len, 3)`, *optional*):
+                Used for rotary positional embeddings. combined_sequence_len is encoder_seq_len + latents_seq_len.
+            image_rotary_emb (Tuple[`torch.FloatTensor`] of shape `(latents_seq_len, 3)`, *optional*):
+                Used for rotary positional embeddings for the latents.
             output_type (`str`, *optional*, defaults to `"pil"`):
                 The output format of the generate image. Choose between
                 [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
@@ -625,7 +631,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                 will be passed as `callback_kwargs` argument. You will only be able to include variables listed in the
                 `._callback_tensor_inputs` attribute of your pipeline class.
             max_sequence_length (`int` defaults to 1024): Maximum sequence length to use with the `prompt`.
-            min_sequence_length (`int` defaults to 128): Minimum sequence length to use with the `prompt`.
+            min_sequence_length (`int` defaults to 256): Minimum sequence length to use with the `prompt`.
             mu (`float`, *optional*): `mu` value used for `dynamic_shifting`.
 
         Examples:
