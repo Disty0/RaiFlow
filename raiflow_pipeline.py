@@ -194,6 +194,10 @@ class RaiFlowPipeline(DiffusionPipeline):
         device = device or self._execution_device
         dtype = dtype or self.text_encoder.dtype
 
+        if prompt_images is None and (prompt == "" or prompt == [""]):
+            # encoding the empty embed via the text encoder is the same as using zeros
+            return [torch.zeros((1, self.text_encoder.config.hidden_size), device=device, dtype=dtype)]
+
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
         if prompt_images is not None and not isinstance(prompt_images, list):
@@ -225,6 +229,7 @@ class RaiFlowPipeline(DiffusionPipeline):
 
         attention_mask = inputs["attention_mask"].to(device, dtype=dtype)
         prompt_embeds = prompt_embeds * attention_mask.unsqueeze(-1).expand(prompt_embeds.shape)
+
         prompt_embeds_list = []
         for i in range(prompt_embeds.size(0)):
             count = 0
