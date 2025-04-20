@@ -421,33 +421,40 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.encoder_in_channels = encoder_in_channels + 4 # pos channels
 
         self.pos_embed = FluxPosEmbed(theta=10000, axes_dim=self.config.axes_dims_rope)
-        self.timestep_embedder = nn.Linear(4 + (4 * self.config.patch_size*self.config.patch_size), self.in_channels, bias=True)
-        self.skip_connect_embedder = FeedForward(
+        self.postemb_embedder = nn.Linear(4 + (4 * self.config.patch_size*self.config.patch_size), self.in_channels, bias=True)
+
+        self.skip_connect_embedder = RaiFlowFeedForward(
             dim=self.in_channels * 2,
-            dim_out=self.inner_dim,
-            mult=self.config.ff_mult,
+            out_dim=self.inner_dim,
+            num_attention_heads=self.config.num_attention_heads,
+            attention_head_dim=self.config.attention_head_dim,
+            heads_per_expert=self.config.heads_per_expert,
+            router_mult=self.config.router_mult,
+            ff_mult=self.config.ff_mult,
             dropout=dropout,
-            activation_fn="gelu-approximate",
-            bias=True
         )
 
-        self.embedder = FeedForward(
+        self.embedder = RaiFlowFeedForward(
             dim=self.in_channels,
-            dim_out=self.inner_dim,
-            mult=self.config.ff_mult,
+            out_dim=self.inner_dim,
+            num_attention_heads=self.config.num_attention_heads,
+            attention_head_dim=self.config.attention_head_dim,
+            heads_per_expert=self.config.heads_per_expert,
+            router_mult=self.config.router_mult,
+            ff_mult=self.config.ff_mult,
             dropout=dropout,
-            activation_fn="gelu-approximate",
-            bias=True
         )
 
         self.norm_context_in = RMSNorm(encoder_in_channels, eps=eps, elementwise_affine=True)
-        self.context_embedder = FeedForward(
+        self.context_embedder = RaiFlowFeedForward(
             dim=self.encoder_in_channels, # dim + pos
-            dim_out=self.inner_dim,
-            mult=self.config.ff_mult,
+            out_dim=self.inner_dim,
+            num_attention_heads=self.config.num_attention_heads,
+            attention_head_dim=self.config.attention_head_dim,
+            heads_per_expert=self.config.heads_per_expert,
+            router_mult=self.config.router_mult,
+            ff_mult=self.config.ff_mult,
             dropout=dropout,
-            activation_fn="gelu-approximate",
-            bias=True
         )
 
         self.norm_skip_connect = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
@@ -505,21 +512,26 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
-        self.norm_out = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
-        self.unembedder = FeedForward(
+        self.norm_unembed = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.unembedder = RaiFlowFeedForward(
             dim=self.inner_dim * 2,
-            dim_out=self.out_channels,
-            mult=self.config.ff_mult,
+            out_dim=self.out_channels,
+            num_attention_heads=self.config.num_attention_heads,
+            attention_head_dim=self.config.attention_head_dim,
+            heads_per_expert=self.config.heads_per_expert,
+            router_mult=self.config.router_mult,
+            ff_mult=self.config.ff_mult,
             dropout=dropout,
-            activation_fn="gelu-approximate",
-            bias=True
         )
+
+        self.scale_out = nn.Parameter(torch.ones(self.out_channels))
+        self.shift_out = nn.Parameter(torch.zeros(self.out_channels))
 
     def forward(
         self,
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: torch.FloatTensor,
-        timestep: torch.LongTensor = None,
+        timestep: torch.LongTensor,
         combined_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         image_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
@@ -571,7 +583,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         batch_size, channels, height, width = hidden_states.shape
         latents_seq_len = (height // self.config.patch_size) * (width // self.config.patch_size)
-        encoder_seq_len = encoder_hidden_states.shape[1]
+        _, encoder_seq_len, _ = encoder_hidden_states.shape
 
         img_ids = None
         if combined_rotary_emb is None:
@@ -579,6 +591,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             img_ids = prepare_latent_image_ids(height, width, hidden_states.device, hidden_states.dtype)
             combined_ids = torch.cat((txt_ids, img_ids), dim=0)
             combined_rotary_emb = self.pos_embed(combined_ids, freqs_dtype=torch.float32)
+
         if image_rotary_emb is None:
             if img_ids is None:
                 img_ids = prepare_latent_image_ids(height, width, hidden_states.device, hidden_states.dtype)
@@ -597,7 +610,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             shape=(batch_size, latents_seq_len, (channels*self.config.patch_size*self.config.patch_size)),
             device=hidden_states.device,
             dtype=hidden_states.dtype,
-            secondary_seq_len=encoder_hidden_states.shape[1],
+            secondary_seq_len=encoder_seq_len,
             base_seq_len=self.base_seq_len,
             sigmas=sigmas,
         )
@@ -608,7 +621,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         skip_connect = pack_2d_latents_to_1d(posed_latents_2d, patch_size=self.config.patch_size)
         skip_connect = torch.cat([skip_connect, posed_latents_1d], dim=2)
-        skip_connect = self.timestep_embedder(skip_connect)
+        skip_connect = self.postemb_embedder(skip_connect)
         skip_connect = torch.cat([hidden_states, skip_connect], dim=2)
 
         skip_connect = self.skip_connect_embedder(skip_connect)
@@ -680,10 +693,12 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     skip_connect=skip_connect,
                 )
 
-        hidden_states = self.norm_out(hidden_states)
+        hidden_states = self.norm_unembed(hidden_states)
         hidden_states = torch.cat([hidden_states, skip_connect], dim=-1)
-        output = self.unembedder(hidden_states)
-        output = unpack_1d_latents_to_2d(output, patch_size=self.config.patch_size, original_height=height, original_widht=width)
+        hidden_states = self.unembedder(hidden_states)
+        hidden_states = hidden_states * self.scale_out
+        hidden_states = hidden_states + self.shift_out
+        output = unpack_1d_latents_to_2d(hidden_states, patch_size=self.config.patch_size, original_height=height, original_widht=width)
 
         if flip_target: # latents - noise to noise - latents
             output = -output

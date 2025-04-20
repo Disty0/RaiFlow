@@ -751,6 +751,7 @@ class RaiFlowPipeline(DiffusionPipeline):
             img_ids = prepare_latent_image_ids(latent_height, latent_width, latents.device, latents.dtype)
             combined_ids = torch.cat((txt_ids, img_ids), dim=0)
             combined_rotary_emb = self.transformer.pos_embed(combined_ids, freqs_dtype=torch.float32)
+
         if image_rotary_emb is None:
             if img_ids is None:
                 img_ids = prepare_latent_image_ids(latent_height, latent_width, latents.device, latents.dtype)
