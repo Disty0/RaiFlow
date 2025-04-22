@@ -423,6 +423,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.pos_embed = FluxPosEmbed(theta=10000, axes_dim=self.config.axes_dims_rope)
         self.postemb_embedder = nn.Linear(4 + (4 * self.config.patch_size*self.config.patch_size), self.in_channels, bias=True)
 
+        self.scale_in = nn.Parameter(torch.ones(self.config.in_channels))
+        self.shift_in = nn.Parameter(torch.zeros(self.config.in_channels))
+
         self.skip_connect_embedder = RaiFlowFeedForward(
             dim=self.in_channels * 2,
             out_dim=self.inner_dim,
@@ -614,6 +617,11 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.base_seq_len,
             sigmas=sigmas,
         )
+
+        hidden_states = hidden_states.permute(0,2,3,1)
+        hidden_states = hidden_states * self.scale_in
+        hidden_states = hidden_states + self.shift_in
+        hidden_states = hidden_states.permute(0,3,1,2)
 
         hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
         hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.config.patch_size)
