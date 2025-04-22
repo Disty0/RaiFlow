@@ -618,10 +618,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             sigmas=sigmas,
         )
 
-        hidden_states = hidden_states.permute(0,2,3,1)
-        hidden_states = hidden_states * self.scale_in
-        hidden_states = hidden_states + self.shift_in
-        hidden_states = hidden_states.permute(0,3,1,2)
+        hidden_states = hidden_states * self.scale_in.view(1,-1,1,1)
+        hidden_states = hidden_states + self.shift_in.view(1,-1,1,1)
 
         hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
         hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.config.patch_size)
