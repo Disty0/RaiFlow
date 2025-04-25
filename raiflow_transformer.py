@@ -58,11 +58,13 @@ class RaiFlowFeedForward(nn.Module):
         batch_size, seq_len, inner_dim = hidden_states.shape
         expert_inputs = self.router(hidden_states)
         expert_inputs = expert_inputs.view(batch_size, seq_len, self.num_experts, self.ff_dim)
+
         expert_outputs = []
         for i, expert in enumerate(self.experts):
             expert_outputs.append(expert(expert_inputs[:, :, i, :]))
         expert_outputs = torch.stack(expert_outputs, dim=2).view(batch_size, seq_len, self.inner_dim)
         expert_outputs = self.proj_out(expert_outputs)
+
         return expert_outputs
 
 
@@ -108,6 +110,9 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             )
 
         self.norm_attn = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.scale_attn = nn.Parameter(torch.ones(dim))
+        self.shift_attn = nn.Parameter(torch.zeros(dim))
+
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -127,6 +132,9 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             self.attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
 
         self.norm_ff = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.scale_ff = nn.Parameter(torch.ones(dim))
+        self.shift_ff = nn.Parameter(torch.zeros(dim))
+
         self.ff = RaiFlowFeedForward(
             dim=dim*2 if self.use_skip_connect else dim,
             out_dim=dim,
@@ -140,7 +148,10 @@ class RaiFlowSingleTransformerBlock(nn.Module):
 
     def forward(self, hidden_states: torch.FloatTensor, rotary_emb: Optional[Tuple[torch.FloatTensor]] = None, skip_connect: Optional[torch.FloatTensor] = None) -> torch.FloatTensor:
         norm_hidden_states = self.norm_attn(hidden_states)
-        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None, rotary_emb=rotary_emb)
+        attn_output = self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None, rotary_emb=rotary_emb)
+        attn_output = attn_output * self.scale_attn
+        attn_output = attn_output + self.shift_attn
+        hidden_states = hidden_states + attn_output
 
 
         norm_hidden_states = self.norm_ff(hidden_states)
@@ -149,7 +160,11 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         else:
             ff_hidden_states = norm_hidden_states
 
-        hidden_states = hidden_states + self.ff(ff_hidden_states)
+        ff_output = self.ff(ff_hidden_states)
+        ff_output = ff_output * self.scale_ff
+        ff_output = ff_output + self.shift_ff
+        hidden_states = hidden_states + ff_output
+
         return hidden_states
 
 
@@ -193,6 +208,13 @@ class RaiFlowJointTransformerBlock(nn.Module):
 
         self.norm_attn = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
         self.norm_attn_context = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+
+        self.scale_attn = nn.Parameter(torch.ones(dim))
+        self.shift_attn = nn.Parameter(torch.zeros(dim))
+
+        self.scale_attn_context = nn.Parameter(torch.ones(dim))
+        self.shift_attn_context = nn.Parameter(torch.zeros(dim))
+
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -244,7 +266,13 @@ class RaiFlowJointTransformerBlock(nn.Module):
         norm_encoder_hidden_states = self.norm_attn_context(encoder_hidden_states)
 
         attn_output, context_attn_output = self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=norm_encoder_hidden_states, rotary_emb=combined_rotary_emb)
+
+        attn_output = attn_output * self.scale_attn
+        attn_output = attn_output + self.shift_attn
         hidden_states = hidden_states + attn_output
+
+        context_attn_output = context_attn_output * self.scale_attn_context
+        context_attn_output = context_attn_output + self.shift_attn_context
         encoder_hidden_states = encoder_hidden_states + context_attn_output
 
         hidden_states = self.latent_transformer(hidden_states, rotary_emb=image_rotary_emb)
@@ -291,7 +319,11 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
+
         self.norm_cross_attn = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.scale_cross_attn = nn.Parameter(torch.ones(dim))
+        self.shift_cross_attn = nn.Parameter(torch.zeros(dim))
+
         self.cross_attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -311,6 +343,9 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             self.cross_attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
 
         self.norm_attn = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.scale_attn = nn.Parameter(torch.ones(dim))
+        self.shift_attn = nn.Parameter(torch.zeros(dim))
+
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -330,6 +365,9 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             self.attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
 
         self.norm_ff = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.scale_ff = nn.Parameter(torch.ones(dim))
+        self.shift_ff = nn.Parameter(torch.zeros(dim))
+
         self.ff = RaiFlowFeedForward(
             dim=dim*2,
             out_dim=dim,
@@ -343,14 +381,24 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, image_rotary_emb: Tuple[torch.FloatTensor], skip_connect: torch.FloatTensor) -> torch.FloatTensor:
         norm_hidden_states = self.norm_cross_attn(hidden_states)
-        hidden_states = hidden_states + self.cross_attn(hidden_states=norm_hidden_states, encoder_hidden_states=encoder_hidden_states)
+        cross_attn_output = self.cross_attn(hidden_states=norm_hidden_states, encoder_hidden_states=encoder_hidden_states)
+        cross_attn_output = cross_attn_output * self.scale_cross_attn
+        cross_attn_output = cross_attn_output + self.shift_cross_attn
+        hidden_states = hidden_states + cross_attn_output
 
         norm_hidden_states = self.norm_attn(hidden_states)
-        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None, rotary_emb=image_rotary_emb)
+        attn_output = self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None, rotary_emb=image_rotary_emb)
+        attn_output = attn_output * self.scale_attn
+        attn_output = attn_output + self.shift_attn
+        hidden_states = hidden_states + attn_output
 
         norm_hidden_states = self.norm_ff(hidden_states)
         ff_hidden_states = torch.cat([norm_hidden_states, skip_connect], dim=-1)
-        hidden_states = hidden_states + self.ff(ff_hidden_states)
+        ff_output = self.ff(ff_hidden_states)
+        ff_output = ff_output * self.scale_ff
+        ff_output = ff_output + self.shift_ff
+        hidden_states = hidden_states + ff_output
+
         return hidden_states
 
 
