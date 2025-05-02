@@ -838,7 +838,18 @@ class RaiFlowPipeline(DiffusionPipeline):
         if output_type == "latent":
             image = latents
         elif getattr(self, "vae", None) is not None:
-            latents = (latents.float() / self.vae.config.scaling_factor) + self.vae.config.shift_factor
+            latents = latents.to(dtype=torch.float32)
+
+            if self.vae.config.latents_std is not None:
+                latents = latents * torch.tensor(self.vae.config.latents_std, device=latents.device, dtype=torch.float32).view(1,-1,1,1)
+            elif self.vae.config.scaling_factor is not None and self.vae.config.scaling_factor != 1:
+                latents = latents / self.vae.config.scaling_factor
+
+            if self.vae.config.latents_mean is not None:
+                latents = latents + torch.tensor(self.vae.config.latents_mean, device=latents.device, dtype=torch.float32).view(1,-1,1,1)
+            elif self.vae.config.shift_factor is not None and self.vae.config.shift_factor != 0:
+                latents = latents + self.vae.config.shift_factor
+
             if self.vae.config.force_upcast and latents_dtype == torch.float16:
                 self.vae = self.vae.to(dtype=torch.float32)
                 image = self.vae.decode(latents, return_dict=False)[0]
