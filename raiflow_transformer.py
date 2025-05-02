@@ -23,7 +23,7 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
 class RaiFlowFeedForward(nn.Module):
-    def __init__(self, dim: int, out_dim: int, num_attention_heads: int, attention_head_dim: int, heads_per_expert: int = 2, router_mult: int = 2, ff_mult: int = 4, dropout: float = 0.1):
+    def __init__(self, dim: int, dim_out: int, num_attention_heads: int, attention_head_dim: int, heads_per_expert: int = 2, router_mult: int = 2, ff_mult: int = 4, dropout: float = 0.1):
         super().__init__()
         self.num_experts = num_attention_heads // heads_per_expert
         self.ff_dim = attention_head_dim * heads_per_expert * router_mult
@@ -51,7 +51,7 @@ class RaiFlowFeedForward(nn.Module):
         self.proj_out = nn.Sequential(
             nn.GELU(approximate='tanh'),
             nn.Dropout(dropout),
-            nn.Linear(self.inner_dim, out_dim, bias=True),
+            nn.Linear(self.inner_dim, dim_out, bias=True),
         )
 
     def forward(self, hidden_states):
@@ -94,6 +94,7 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         heads_per_expert: int,
         router_mult: int = 2,
         ff_mult: int = 4,
+        use_moe: bool = True,
         use_skip_connect: bool = False,
         dropout: float = 0.1,
         qk_norm: str = "dynamic_tanh",
@@ -135,16 +136,26 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         self.scale_ff = nn.Parameter(torch.ones(dim))
         self.shift_ff = nn.Parameter(torch.zeros(dim))
 
-        self.ff = RaiFlowFeedForward(
-            dim=dim*2 if self.use_skip_connect else dim,
-            out_dim=dim,
-            num_attention_heads=num_attention_heads,
-            attention_head_dim=attention_head_dim,
-            heads_per_expert=heads_per_expert,
-            router_mult=router_mult,
-            ff_mult=ff_mult,
-            dropout=dropout,
-        )
+        if use_moe:
+            self.ff = RaiFlowFeedForward(
+                dim=dim*2 if self.use_skip_connect else dim,
+                dim_out=dim,
+                num_attention_heads=num_attention_heads,
+                attention_head_dim=attention_head_dim,
+                heads_per_expert=heads_per_expert,
+                router_mult=router_mult,
+                ff_mult=ff_mult,
+                dropout=dropout,
+            )
+        else:
+            self.ff = FeedForward(
+                dim=dim*2 if self.use_skip_connect else dim,
+                dim_out=dim,
+                mult=ff_mult,
+                dropout=dropout,
+                activation_fn="gelu-approximate",
+                bias=True,
+            )
 
     def forward(self, hidden_states: torch.FloatTensor, rotary_emb: Optional[Tuple[torch.FloatTensor]] = None, skip_connect: Optional[torch.FloatTensor] = None) -> torch.FloatTensor:
         norm_hidden_states = self.norm_attn(hidden_states)
@@ -193,6 +204,7 @@ class RaiFlowJointTransformerBlock(nn.Module):
         heads_per_expert: int,
         router_mult: int = 2,
         ff_mult: int = 4,
+        use_moe: bool = True,
         dropout: float = 0.1,
         qk_norm: str = "dynamic_tanh",
         eps: float = 1e-05,
@@ -242,6 +254,7 @@ class RaiFlowJointTransformerBlock(nn.Module):
             attention_head_dim=attention_head_dim,
             heads_per_expert=heads_per_expert,
             ff_mult=ff_mult,
+            use_moe=use_moe,
             use_skip_connect=False,
             dropout=dropout,
             qk_norm=qk_norm,
@@ -254,6 +267,7 @@ class RaiFlowJointTransformerBlock(nn.Module):
             attention_head_dim=attention_head_dim,
             heads_per_expert=heads_per_expert,
             ff_mult=ff_mult,
+            use_moe=use_moe,
             use_skip_connect=False,
             dropout=dropout,
             qk_norm=qk_norm,
@@ -305,6 +319,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         heads_per_expert: int,
         router_mult: int = 2,
         ff_mult: int = 4,
+        use_moe: bool = True,
         dropout: float = 0.1,
         qk_norm: str = "dynamic_tanh",
         eps: float = 1e-05,
@@ -368,16 +383,26 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         self.scale_ff = nn.Parameter(torch.ones(dim))
         self.shift_ff = nn.Parameter(torch.zeros(dim))
 
-        self.ff = RaiFlowFeedForward(
-            dim=dim*2,
-            out_dim=dim,
-            num_attention_heads=num_attention_heads,
-            attention_head_dim=attention_head_dim,
-            heads_per_expert=heads_per_expert,
-            router_mult=router_mult,
-            ff_mult=ff_mult,
-            dropout=dropout,
-        )
+        if use_moe:
+            self.ff = RaiFlowFeedForward(
+                dim=dim*2,
+                dim_out=dim,
+                num_attention_heads=num_attention_heads,
+                attention_head_dim=attention_head_dim,
+                heads_per_expert=heads_per_expert,
+                router_mult=router_mult,
+                ff_mult=ff_mult,
+                dropout=dropout,
+            )
+        else:
+            self.ff = FeedForward(
+                dim=dim*2,
+                dim_out=dim,
+                mult=ff_mult,
+                dropout=dropout,
+                activation_fn="gelu-approximate",
+                bias=True,
+            )
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor, image_rotary_emb: Tuple[torch.FloatTensor], skip_connect: torch.FloatTensor) -> torch.FloatTensor:
         norm_hidden_states = self.norm_cross_attn(hidden_states)
@@ -454,6 +479,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         patch_size: int = 1,
         router_mult: int = 2,
         ff_mult: int = 4,
+        use_moe: bool = True,
         dropout: float = 0.1,
         qk_norm: str = "dynamic_tanh",
         axes_dims_rope = (16, 24, 24),
@@ -474,40 +500,68 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.scale_in = nn.Parameter(torch.ones(self.config.in_channels))
         self.shift_in = nn.Parameter(torch.zeros(self.config.in_channels))
 
-        self.skip_connect_embedder = RaiFlowFeedForward(
-            dim=self.in_channels * 2,
-            out_dim=self.inner_dim,
-            num_attention_heads=self.config.num_attention_heads,
-            attention_head_dim=self.config.attention_head_dim,
-            heads_per_expert=self.config.heads_per_expert,
-            router_mult=self.config.router_mult,
-            ff_mult=self.config.ff_mult,
-            dropout=dropout,
-        )
+        if self.config.use_moe:
+            self.skip_connect_embedder = RaiFlowFeedForward(
+                dim=self.in_channels * 2,
+                dim_out=self.inner_dim,
+                num_attention_heads=self.config.num_attention_heads,
+                attention_head_dim=self.config.attention_head_dim,
+                heads_per_expert=self.config.heads_per_expert,
+                router_mult=self.config.router_mult,
+                ff_mult=self.config.ff_mult,
+                dropout=dropout,
+            )
 
-        self.embedder = RaiFlowFeedForward(
-            dim=self.in_channels,
-            out_dim=self.inner_dim,
-            num_attention_heads=self.config.num_attention_heads,
-            attention_head_dim=self.config.attention_head_dim,
-            heads_per_expert=self.config.heads_per_expert,
-            router_mult=self.config.router_mult,
-            ff_mult=self.config.ff_mult,
-            dropout=dropout,
-        )
+            self.embedder = RaiFlowFeedForward(
+                dim=self.in_channels,
+                dim_out=self.inner_dim,
+                num_attention_heads=self.config.num_attention_heads,
+                attention_head_dim=self.config.attention_head_dim,
+                heads_per_expert=self.config.heads_per_expert,
+                router_mult=self.config.router_mult,
+                ff_mult=self.config.ff_mult,
+                dropout=dropout,
+            )
+
+            self.context_embedder = RaiFlowFeedForward(
+                dim=self.encoder_in_channels, # dim + pos
+                dim_out=self.inner_dim,
+                num_attention_heads=self.config.num_attention_heads,
+                attention_head_dim=self.config.attention_head_dim,
+                heads_per_expert=self.config.heads_per_expert,
+                router_mult=self.config.router_mult,
+                ff_mult=self.config.ff_mult,
+                dropout=dropout,
+            )
+        else:
+            self.skip_connect_embedder = FeedForward(
+                dim=self.in_channels * 2,
+                dim_out=self.inner_dim,
+                mult=self.config.ff_mult,
+                dropout=dropout,
+                activation_fn="gelu-approximate",
+                bias=True,
+            )
+
+            self.embedder = FeedForward(
+                dim=self.in_channels,
+                dim_out=self.inner_dim,
+                mult=self.config.ff_mult,
+                dropout=dropout,
+                activation_fn="gelu-approximate",
+                bias=True,
+            )
+
+            self.context_embedder = FeedForward(
+                dim=self.encoder_in_channels,
+                dim_out=self.inner_dim,
+                mult=self.config.ff_mult,
+                dropout=dropout,
+                activation_fn="gelu-approximate",
+                bias=True,
+            )
 
         self.norm_context_in = RMSNorm(encoder_in_channels, eps=eps, elementwise_affine=True)
-        self.context_embedder = RaiFlowFeedForward(
-            dim=self.encoder_in_channels, # dim + pos
-            out_dim=self.inner_dim,
-            num_attention_heads=self.config.num_attention_heads,
-            attention_head_dim=self.config.attention_head_dim,
-            heads_per_expert=self.config.heads_per_expert,
-            router_mult=self.config.router_mult,
-            ff_mult=self.config.ff_mult,
-            dropout=dropout,
-        )
-
         self.norm_skip_connect = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
         self.norm_context = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
 
@@ -520,6 +574,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     heads_per_expert=self.config.heads_per_expert,
                     router_mult=self.config.router_mult,
                     ff_mult=self.config.ff_mult,
+                    use_moe=self.config.use_moe,
                     dropout=dropout,
                     qk_norm=qk_norm,
                     eps=eps,
@@ -537,6 +592,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     heads_per_expert=self.config.heads_per_expert,
                     router_mult=self.config.router_mult,
                     ff_mult=self.config.ff_mult,
+                    use_moe=self.config.use_moe,
                     dropout=dropout,
                     qk_norm=qk_norm,
                     eps=eps,
@@ -554,6 +610,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     heads_per_expert=self.config.heads_per_expert,
                     router_mult=self.config.router_mult,
                     ff_mult=self.config.ff_mult,
+                    use_moe=self.config.use_moe,
                     use_skip_connect=True,
                     dropout=dropout,
                     qk_norm=qk_norm,
@@ -563,18 +620,28 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
-        self.norm_unembed = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
-        self.unembedder = RaiFlowFeedForward(
-            dim=self.inner_dim * 2,
-            out_dim=self.out_channels,
-            num_attention_heads=self.config.num_attention_heads,
-            attention_head_dim=self.config.attention_head_dim,
-            heads_per_expert=self.config.heads_per_expert,
-            router_mult=self.config.router_mult,
-            ff_mult=self.config.ff_mult,
-            dropout=dropout,
-        )
+        if self.config.use_moe:
+            self.unembedder = RaiFlowFeedForward(
+                dim=self.inner_dim * 2,
+                dim_out=self.out_channels,
+                num_attention_heads=self.config.num_attention_heads,
+                attention_head_dim=self.config.attention_head_dim,
+                heads_per_expert=self.config.heads_per_expert,
+                router_mult=self.config.router_mult,
+                ff_mult=self.config.ff_mult,
+                dropout=dropout,
+            )
+        else:
+            self.unembedder = FeedForward(
+                dim=self.inner_dim * 2,
+                dim_out=self.out_channels,
+                mult=self.config.ff_mult,
+                dropout=dropout,
+                activation_fn="gelu-approximate",
+                bias=True,
+            )
 
+        self.norm_unembed = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
         self.scale_out = nn.Parameter(torch.ones(self.out_channels))
         self.shift_out = nn.Parameter(torch.zeros(self.out_channels))
 
@@ -639,13 +706,13 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         img_ids = None
         if combined_rotary_emb is None:
             txt_ids = torch.zeros((encoder_seq_len,3), device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype) 
-            img_ids = prepare_latent_image_ids(height, width, hidden_states.device, hidden_states.dtype)
+            img_ids = prepare_latent_image_ids((height // self.config.patch_size), (width // self.config.patch_size), hidden_states.device, hidden_states.dtype)
             combined_ids = torch.cat((txt_ids, img_ids), dim=0)
             combined_rotary_emb = self.pos_embed(combined_ids, freqs_dtype=torch.float32)
 
         if image_rotary_emb is None:
             if img_ids is None:
-                img_ids = prepare_latent_image_ids(height, width, hidden_states.device, hidden_states.dtype)
+                img_ids = prepare_latent_image_ids((height // self.config.patch_size), (width // self.config.patch_size), hidden_states.device, hidden_states.dtype)
             image_rotary_emb = self.pos_embed(img_ids, freqs_dtype=torch.float32)
 
         sigmas = timestep.to(dtype=hidden_states.dtype) / self.config.num_train_timesteps

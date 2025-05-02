@@ -721,7 +721,7 @@ class RaiFlowPipeline(DiffusionPipeline):
         # 5. Prepare timesteps
         scheduler_kwargs = {}
         if self.scheduler.config.get("use_dynamic_shifting", None) and mu is None:
-            image_seq_len = latent_height * latent_width
+            image_seq_len = (latent_height // self.patch_size) * (latent_width // self.patch_size)
             mu = calculate_shift(
                 image_seq_len,
                 self.scheduler.config.get("base_image_seq_len", 256),
@@ -748,13 +748,13 @@ class RaiFlowPipeline(DiffusionPipeline):
         img_ids = None
         if combined_rotary_emb is None:
             txt_ids = torch.zeros((encoder_seq_len,3), device=prompt_embeds.device, dtype=prompt_embeds.dtype) 
-            img_ids = prepare_latent_image_ids(latent_height, latent_width, latents.device, latents.dtype)
+            img_ids = prepare_latent_image_ids((latent_height // self.patch_size), (latent_width // self.patch_size), latents.device, latents.dtype)
             combined_ids = torch.cat((txt_ids, img_ids), dim=0)
             combined_rotary_emb = self.transformer.pos_embed(combined_ids, freqs_dtype=torch.float32)
 
         if image_rotary_emb is None:
             if img_ids is None:
-                img_ids = prepare_latent_image_ids(latent_height, latent_width, latents.device, latents.dtype)
+                img_ids = prepare_latent_image_ids((latent_height // self.patch_size), (latent_width // self.patch_size), latents.device, latents.dtype)
             image_rotary_emb = self.transformer.pos_embed(img_ids, freqs_dtype=torch.float32)
 
         # 6. Denoising loop
