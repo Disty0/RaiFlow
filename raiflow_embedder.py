@@ -59,20 +59,20 @@ def pack_2d_latents_to_1d(latents: torch.FloatTensor, patch_size: int) -> torch.
     return packed_latents
 
 
-def unpack_1d_latents_to_2d(latents: torch.FloatTensor, patch_size: int, original_height: int, original_widht: int) -> torch.FloatTensor:
+def unpack_1d_latents_to_2d(latents: torch.FloatTensor, patch_size: int, original_height: int, original_width: int) -> torch.FloatTensor:
         batch_size, _, channels = latents.shape
 
         latents = latents.view(
             batch_size,
             (original_height // patch_size),
-            (original_widht // patch_size),
+            (original_width // patch_size),
             (channels // (patch_size * patch_size)),
             patch_size,
             patch_size
         )
 
         latents = latents.permute(0, 3, 1, 4, 2, 5)
-        latents = latents.reshape(batch_size, (channels // (patch_size * patch_size)), original_height, original_widht)
+        latents = latents.reshape(batch_size, (channels // (patch_size * patch_size)), original_height, original_width)
         return latents
 
 
