@@ -76,20 +76,19 @@ def unpack_1d_latents_to_2d(latents: torch.FloatTensor, patch_size: int, origina
         return latents
 
 
-# Copied from diffusers.pipelines.flux.pipeline_flux.FluxPipeline._prepare_latent_image_ids
-# removed batch_size argument as it is unused by this function
+# Modified from diffusers.pipelines.flux.pipeline_flux.FluxPipeline._prepare_latent_image_ids
 def prepare_latent_image_ids(height, width, device, dtype):
     latent_image_ids = torch.zeros(height, width, 3)
-    latent_image_ids[..., 1] = latent_image_ids[..., 1] + torch.arange(height)[:, None]
-    latent_image_ids[..., 2] = latent_image_ids[..., 2] + torch.arange(width)[None, :]
-
-    latent_image_id_height, latent_image_id_width, latent_image_id_channels = latent_image_ids.shape
-
-    latent_image_ids = latent_image_ids.reshape(
-        latent_image_id_height * latent_image_id_width, latent_image_id_channels
-    )
-
+    latent_image_ids[..., 1] = latent_image_ids[..., 1] + torch.arange(height).unsqueeze(-1)
+    latent_image_ids[..., 2] = latent_image_ids[..., 2] + torch.arange(width).unsqueeze(0)
+    latent_image_ids = latent_image_ids.reshape(height * width, 3)
     return latent_image_ids.to(device=device, dtype=dtype)
+
+
+def prepare_text_embed_ids(seq_len, device, dtype):
+    text_embed_ids = torch.zeros(seq_len, 3)
+    text_embed_ids[..., 0] = text_embed_ids[..., 0] + torch.arange(seq_len)
+    return text_embed_ids.to(device=device, dtype=dtype)
 
 
 class FluxPosEmbed(nn.Module):

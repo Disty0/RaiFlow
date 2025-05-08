@@ -15,7 +15,7 @@ from diffusers.models.modeling_utils import ModelMixin
 
 from .dynamic_tanh import DynamicTanh
 from .raiflow_atten import RaiFlowAttnProcessor2_0, RaiFlowCrossAttnProcessor2_0
-from .raiflow_embedder import RaiFlowPosEmbed1D, RaiFlowPosEmbed2D, pack_2d_latents_to_1d, unpack_1d_latents_to_2d, prepare_latent_image_ids, FluxPosEmbed
+from .raiflow_embedder import RaiFlowPosEmbed1D, RaiFlowPosEmbed2D, pack_2d_latents_to_1d, unpack_1d_latents_to_2d, prepare_latent_image_ids, prepare_text_embed_ids, FluxPosEmbed
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -288,6 +288,7 @@ class RaiFlowJointTransformerBlock(nn.Module):
         encoder_hidden_states: torch.FloatTensor,
         combined_rotary_emb: Tuple[torch.FloatTensor],
         image_rotary_emb: Tuple[torch.FloatTensor],
+        text_rotary_emb: Tuple[torch.FloatTensor],
         height: Optional[int] = None,
         width: Optional[int] = None,
     ) -> torch.FloatTensor:
@@ -305,7 +306,7 @@ class RaiFlowJointTransformerBlock(nn.Module):
         encoder_hidden_states = encoder_hidden_states + context_attn_output
 
         hidden_states = self.latent_transformer(hidden_states, rotary_emb=image_rotary_emb, height=height, width=width)
-        encoder_hidden_states = self.encoder_transformer(encoder_hidden_states, rotary_emb=None)
+        encoder_hidden_states = self.encoder_transformer(encoder_hidden_states, rotary_emb=text_rotary_emb)
         return hidden_states, encoder_hidden_states
 
 
@@ -631,6 +632,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         timestep: torch.LongTensor,
         combined_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         image_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
+        text_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
         flip_target: bool = True,
@@ -686,15 +688,15 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         img_ids = None
         if combined_rotary_emb is None:
-            txt_ids = torch.zeros((encoder_seq_len,3), device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype) 
+            txt_ids = prepare_text_embed_ids(encoder_seq_len, device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype) 
             img_ids = prepare_latent_image_ids((height // self.config.patch_size), (width // self.config.patch_size), hidden_states.device, hidden_states.dtype)
             combined_ids = torch.cat((txt_ids, img_ids), dim=0)
             combined_rotary_emb = self.pos_embed(combined_ids, freqs_dtype=torch.float32)
 
         if image_rotary_emb is None:
-            if img_ids is None:
-                img_ids = prepare_latent_image_ids((height // self.config.patch_size), (width // self.config.patch_size), hidden_states.device, hidden_states.dtype)
-            image_rotary_emb = self.pos_embed(img_ids, freqs_dtype=torch.float32)
+            image_rotary_emb = (combined_rotary_emb[0][encoder_seq_len :], combined_rotary_emb[1][encoder_seq_len :])
+        if text_rotary_emb is None:
+            text_rotary_emb = (combined_rotary_emb[0][: encoder_seq_len], combined_rotary_emb[1][: encoder_seq_len])
 
         sigmas = timestep.to(dtype=hidden_states.dtype) / self.config.num_train_timesteps
         sigmas = sigmas.view(batch_size, 1, 1)
@@ -752,6 +754,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     encoder_hidden_states,
                     combined_rotary_emb,
                     image_rotary_emb,
+                    text_rotary_emb,
                     patched_height,
                     patched_width,
                 )
@@ -761,6 +764,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     encoder_hidden_states=encoder_hidden_states,
                     combined_rotary_emb=combined_rotary_emb,
                     image_rotary_emb=image_rotary_emb,
+                    text_rotary_emb=text_rotary_emb,
                     height=patched_height,
                     width=patched_width,
                 )
