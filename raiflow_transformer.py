@@ -400,7 +400,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         self.shift_ff = nn.Parameter(torch.zeros(dim))
 
         self.ff = RaiFlowFeedForward(
-            dim=dim*2,
+            dim=dim,
             dim_out=dim,
             num_attention_heads=num_attention_heads,
             attention_head_dim=attention_head_dim,
@@ -416,7 +416,6 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: torch.FloatTensor,
         image_rotary_emb: Tuple[torch.FloatTensor],
-        skip_connect: torch.FloatTensor,
         height: Optional[int] = None,
         width: Optional[int] = None,
     ) -> torch.FloatTensor:
@@ -433,8 +432,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         hidden_states = hidden_states + attn_output
 
         norm_hidden_states = self.norm_ff(hidden_states)
-        ff_hidden_states = torch.cat([norm_hidden_states, skip_connect], dim=-1)
-        ff_output = self.ff(ff_hidden_states, height=height, width=width)
+        ff_output = self.ff(norm_hidden_states, height=height, width=width)
         ff_output = ff_output * self.scale_ff
         ff_output = ff_output + self.shift_ff
         hidden_states = hidden_states + ff_output
@@ -572,7 +570,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
-        self.transformer_blocks = nn.ModuleList(
+        self.cond_transformer_blocks = nn.ModuleList(
             [
                 RaiFlowConditionalTransformer2DBlock(
                     dim=self.inner_dim,
@@ -610,7 +608,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         )
 
         self.unembedder = RaiFlowFeedForward(
-            dim=self.inner_dim * 2,
+            dim=self.inner_dim,
             dim_out=self.out_channels,
             num_attention_heads=self.config.num_attention_heads,
             attention_head_dim=self.config.attention_head_dim,
@@ -771,14 +769,13 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         encoder_hidden_states = self.norm_context(encoder_hidden_states)
 
-        for index_block, block in enumerate(self.transformer_blocks):
+        for index_block, block in enumerate(self.cond_transformer_blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states = self._gradient_checkpointing_func(
                     block,
                     hidden_states,
                     encoder_hidden_states,
                     image_rotary_emb,
-                    skip_connect,
                     patched_height,
                     patched_width,
                 )
@@ -787,7 +784,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     image_rotary_emb=image_rotary_emb,
-                    skip_connect=skip_connect,
                     height=patched_height,
                     width=patched_width,
                 )
@@ -812,7 +808,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 )
 
         hidden_states = self.norm_unembed(hidden_states)
-        hidden_states = torch.cat([hidden_states, skip_connect], dim=-1)
         hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
         hidden_states = hidden_states * self.scale_out
         hidden_states = hidden_states + self.shift_out
