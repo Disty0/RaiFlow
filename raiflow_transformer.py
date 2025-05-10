@@ -89,7 +89,6 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         heads_per_group (`int`): The number of heads to use per conv goup.
         router_mult (`int`, *optional*, defaults to 2): The multiplier to use for the router feed forward hidden dimension.
         ff_mult (`int`, *optional*, defaults to 2): The multiplier to use for the conv feed forward hidden dimension.
-        use_skip_connect (`bool`, *optional*, defaults to False): Whether or not to use external skip connects.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
         qk_norm (`str`, *optional*, defaults to "dynamic_tanh"): The qk normalization to use in attention.
         eps (`float`, *optional*, defaults to 1e-05): The eps used with nn modules.
@@ -104,13 +103,11 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         router_mult: int = 2,
         ff_mult: int = 2,
         is_2d: bool = True,
-        use_skip_connect: bool = False,
         dropout: float = 0.1,
         qk_norm: str = "dynamic_tanh",
         eps: float = 1e-05,
     ):
         super().__init__()
-        self.use_skip_connect = use_skip_connect
 
         if hasattr(F, "scaled_dot_product_attention"):
             processor = RaiFlowAttnProcessor2_0()
@@ -146,7 +143,7 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         self.shift_ff = nn.Parameter(torch.zeros(dim))
 
         self.ff = RaiFlowFeedForward(
-            dim=dim*2 if self.use_skip_connect else dim,
+            dim=dim,
             dim_out=dim,
             num_attention_heads=num_attention_heads,
             attention_head_dim=attention_head_dim,
@@ -161,7 +158,6 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         self,
         hidden_states: torch.FloatTensor,
         rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
-        skip_connect: Optional[torch.FloatTensor] = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
     ) -> torch.FloatTensor:
@@ -173,12 +169,7 @@ class RaiFlowSingleTransformerBlock(nn.Module):
 
 
         norm_hidden_states = self.norm_ff(hidden_states)
-        if self.use_skip_connect:
-            ff_hidden_states = torch.cat([norm_hidden_states, skip_connect], dim=-1)
-        else:
-            ff_hidden_states = norm_hidden_states
-
-        ff_output = self.ff(ff_hidden_states, height=height, width=width)
+        ff_output = self.ff(norm_hidden_states, height=height, width=width)
         ff_output = ff_output * self.scale_ff
         ff_output = ff_output + self.shift_ff
         hidden_states = hidden_states + ff_output
@@ -262,7 +253,6 @@ class RaiFlowJointTransformerBlock(nn.Module):
             heads_per_group=heads_per_group,
             ff_mult=ff_mult,
             is_2d=False,
-            use_skip_connect=False,
             dropout=dropout,
             qk_norm=qk_norm,
             eps=eps,
@@ -275,7 +265,6 @@ class RaiFlowJointTransformerBlock(nn.Module):
             heads_per_group=heads_per_group,
             ff_mult=ff_mult,
             is_2d=is_2d,
-            use_skip_connect=False,
             dropout=dropout,
             qk_norm=qk_norm,
             eps=eps,
@@ -450,7 +439,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         in_channels (`int`, *optional*, defaults to 384): The number of channels in the input.
         num_joint_layers (`int`, *optional*, defaults to 4): The number of joint layers of Transformer blocks to use.
         num_layers (`int`, *optional*, defaults to 16): The number of conditional layers of Transformer blocks to use.
-        num_single_layers (`int`, *optional*, defaults to 4): The number of single layers of Transformer blocks to use.
+        num_refiner_layers (`int`, *optional*, defaults to 4): The number of refiner layers of Transformer blocks to use.
         attention_head_dim (`int`, *optional*, defaults to 64): The number of channels in each head.
         num_attention_heads (`int`, *optional*, defaults to 24): The number of heads to use for multi-head attention.
         heads_per_group (`int`, *optional*, defaults to 1): The number of heads to use per conv goup.
@@ -481,7 +470,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         in_channels: int = 384,
         num_joint_layers: int = 4,
         num_layers: int = 16,
-        num_single_layers: int = 4,
+        num_refiner_layers: int = 4,
         attention_head_dim: int = 64,
         num_attention_heads: int = 24,
         heads_per_group: int = 1,
@@ -588,9 +577,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
-        self.single_transformer_blocks = nn.ModuleList(
+        self.refiner_transformer_blocks = nn.ModuleList(
             [
-                RaiFlowSingleTransformerBlock(
+                RaiFlowConditionalTransformer2DBlock(
                     dim=self.inner_dim,
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
@@ -598,12 +587,11 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     router_mult=self.config.router_mult,
                     ff_mult=self.config.ff_mult,
                     is_2d=True,
-                    use_skip_connect=True,
                     dropout=dropout,
                     qk_norm=qk_norm,
                     eps=eps,
                 )
-                for _ in range(self.config.num_single_layers)
+                for _ in range(self.config.num_refiner_layers)
             ]
         )
 
@@ -788,21 +776,21 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     width=patched_width,
                 )
 
-        for index_block, block in enumerate(self.single_transformer_blocks):
+        for index_block, block in enumerate(self.refiner_transformer_blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 hidden_states = self._gradient_checkpointing_func(
                     block,
                     hidden_states,
-                    image_rotary_emb,
                     skip_connect,
+                    image_rotary_emb,
                     patched_height,
                     patched_width,
                 )
             else:
                 hidden_states = block(
                     hidden_states=hidden_states,
-                    rotary_emb=image_rotary_emb,
-                    skip_connect=skip_connect,
+                    encoder_hidden_states=skip_connect,
+                    image_rotary_emb=image_rotary_emb,
                     height=patched_height,
                     width=patched_width,
                 )
