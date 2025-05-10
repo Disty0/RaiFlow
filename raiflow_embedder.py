@@ -104,7 +104,7 @@ class FluxPosEmbed(nn.Module):
         cos_out = []
         sin_out = []
         pos = ids.float()
-        if freqs_dtype is None:
+        if freqs_dtype is None or freqs_dtype == torch.float64:
             is_mps = ids.device.type == "mps"
             is_npu = ids.device.type == "npu"
             freqs_dtype = torch.float32 if (is_mps or is_npu) else torch.float64
