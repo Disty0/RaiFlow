@@ -500,9 +500,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         self.scale_in = nn.Parameter(torch.ones(self.config.in_channels))
         self.shift_in = nn.Parameter(torch.zeros(self.config.in_channels))
-        self.embedder = nn.Linear(self.in_channels, self.inner_dim, bias=True)
 
-        self.norm_skip_connect = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
         self.skip_connect_embedder = RaiFlowFeedForward(
             dim=self.in_channels * 2,
             dim_out=self.inner_dim,
@@ -515,8 +513,32 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             is_2d=True,
         )
 
+        self.embedder = RaiFlowFeedForward(
+            dim=self.in_channels,
+            dim_out=self.inner_dim,
+            num_attention_heads=self.config.num_attention_heads,
+            attention_head_dim=self.config.attention_head_dim,
+            heads_per_group=self.config.heads_per_group,
+            router_mult=self.config.router_mult,
+            ff_mult=self.config.ff_mult,
+            dropout=dropout,
+            is_2d=True,
+        )
+
+        self.context_embedder = RaiFlowFeedForward(
+            dim=self.encoder_in_channels, # dim + pos
+            dim_out=self.inner_dim,
+            num_attention_heads=self.config.num_attention_heads,
+            attention_head_dim=self.config.attention_head_dim,
+            heads_per_group=self.config.heads_per_group,
+            router_mult=self.config.router_mult,
+            ff_mult=self.config.ff_mult,
+            dropout=dropout,
+            is_2d=False,
+        )
+
         self.norm_context_in = RMSNorm(encoder_in_channels, eps=eps, elementwise_affine=True)
-        self.context_embedder = nn.Linear(self.encoder_in_channels, self.inner_dim, bias=True)
+        self.norm_skip_connect = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
         self.norm_context = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
 
         self.joint_transformer_blocks = nn.ModuleList(
@@ -573,8 +595,19 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
+        self.unembedder = RaiFlowFeedForward(
+            dim=self.inner_dim,
+            dim_out=self.out_channels,
+            num_attention_heads=self.config.num_attention_heads,
+            attention_head_dim=self.config.attention_head_dim,
+            heads_per_group=self.config.heads_per_group,
+            router_mult=self.config.router_mult,
+            ff_mult=self.config.ff_mult,
+            dropout=dropout,
+            is_2d=True,
+        )
+
         self.norm_unembed = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
-        self.unembedder = nn.Linear(self.inner_dim, self.out_channels, bias=True)
         self.scale_out = nn.Parameter(torch.ones(self.out_channels))
         self.shift_out = nn.Parameter(torch.zeros(self.out_channels))
 
@@ -684,7 +717,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         skip_connect = self.skip_connect_embedder(skip_connect, height=patched_height, width=patched_width)
         skip_connect = self.norm_skip_connect(skip_connect)
 
-        hidden_states = self.embedder(hidden_states)
+        hidden_states = self.embedder(hidden_states, height=patched_height, width=patched_width)
 
         posed_encoder_1d = RaiFlowPosEmbed1D(
             shape=encoder_hidden_states.shape,
@@ -763,7 +796,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 )
 
         hidden_states = self.norm_unembed(hidden_states)
-        hidden_states = self.unembedder(hidden_states)
+        hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
         hidden_states = hidden_states * self.scale_out
         hidden_states = hidden_states + self.shift_out
         output = unpack_1d_latents_to_2d(hidden_states, patch_size=self.config.patch_size, original_height=height, original_width=width)
