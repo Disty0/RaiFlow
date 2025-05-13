@@ -163,15 +163,13 @@ class RaiFlowSingleTransformerBlock(nn.Module):
     ) -> torch.FloatTensor:
         norm_hidden_states = self.norm_attn(hidden_states)
         attn_output = self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None, rotary_emb=rotary_emb)
-        attn_output = attn_output * self.scale_attn
-        attn_output = attn_output + self.shift_attn
+        attn_output = torch.addcmul(self.shift_attn, attn_output, self.scale_attn)
         hidden_states = hidden_states + attn_output
 
 
         norm_hidden_states = self.norm_ff(hidden_states)
         ff_output = self.ff(norm_hidden_states, height=height, width=width)
-        ff_output = ff_output * self.scale_ff
-        ff_output = ff_output + self.shift_ff
+        ff_output = torch.addcmul(self.shift_ff, ff_output, self.scale_ff)
         hidden_states = hidden_states + ff_output
 
         return hidden_states
@@ -286,12 +284,10 @@ class RaiFlowJointTransformerBlock(nn.Module):
 
         attn_output, context_attn_output = self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=norm_encoder_hidden_states, rotary_emb=combined_rotary_emb)
 
-        attn_output = attn_output * self.scale_attn
-        attn_output = attn_output + self.shift_attn
+        attn_output = torch.addcmul(self.shift_attn, attn_output, self.scale_attn)
         hidden_states = hidden_states + attn_output
 
-        context_attn_output = context_attn_output * self.scale_attn_context
-        context_attn_output = context_attn_output + self.shift_attn_context
+        context_attn_output = torch.addcmul(self.shift_attn_context, context_attn_output, self.scale_attn_context)
         encoder_hidden_states = encoder_hidden_states + context_attn_output
 
         hidden_states = self.latent_transformer(hidden_states, rotary_emb=image_rotary_emb, height=height, width=width)
@@ -410,20 +406,17 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
     ) -> torch.FloatTensor:
         norm_hidden_states = self.norm_cross_attn(hidden_states)
         cross_attn_output = self.cross_attn(hidden_states=norm_hidden_states, encoder_hidden_states=encoder_hidden_states)
-        cross_attn_output = cross_attn_output * self.scale_cross_attn
-        cross_attn_output = cross_attn_output + self.shift_cross_attn
+        cross_attn_output = torch.addcmul(self.shift_cross_attn, cross_attn_output, self.scale_cross_attn)
         hidden_states = hidden_states + cross_attn_output
 
         norm_hidden_states = self.norm_attn(hidden_states)
         attn_output = self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None, rotary_emb=image_rotary_emb)
-        attn_output = attn_output * self.scale_attn
-        attn_output = attn_output + self.shift_attn
+        attn_output = torch.addcmul(self.shift_attn, attn_output, self.scale_attn)
         hidden_states = hidden_states + attn_output
 
         norm_hidden_states = self.norm_ff(hidden_states)
         ff_output = self.ff(norm_hidden_states, height=height, width=width)
-        ff_output = ff_output * self.scale_ff
-        ff_output = ff_output + self.shift_ff
+        ff_output = torch.addcmul(self.shift_ff, ff_output, self.scale_ff)
         hidden_states = hidden_states + ff_output
 
         return hidden_states
@@ -702,9 +695,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             sigmas=sigmas,
         )
 
-        hidden_states = hidden_states * self.scale_in.view(1,-1,1,1)
-        hidden_states = hidden_states + self.shift_in.view(1,-1,1,1)
 
+        hidden_states = torch.addcmul(self.shift_in.view(1,-1,1,1), hidden_states, self.scale_in.view(1,-1,1,1))
         hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
         hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.config.patch_size)
         hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
@@ -797,8 +789,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         hidden_states = self.norm_unembed(hidden_states)
         hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
-        hidden_states = hidden_states * self.scale_out
-        hidden_states = hidden_states + self.shift_out
+        hidden_states = torch.addcmul(self.shift_out, hidden_states, self.scale_out)
         output = unpack_1d_latents_to_2d(hidden_states, patch_size=self.config.patch_size, original_height=height, original_width=width)
 
         if flip_target: # latents - noise to noise - latents

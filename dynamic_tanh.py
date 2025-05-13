@@ -24,7 +24,8 @@ class DynamicTanh(nn.Module):
     def forward(self, hidden_states):
         hidden_states = torch.tanh(self.alpha * hidden_states)
         if self.weight is not None:
-            hidden_states = hidden_states * self.weight
             if self.bias is not None:
-                hidden_states = hidden_states + self.bias
+                hidden_states = torch.addcmul(self.bias, hidden_states, self.weight)
+            else:
+                hidden_states = torch.mul(hidden_states, self.weight)
         return hidden_states
