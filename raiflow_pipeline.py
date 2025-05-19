@@ -145,7 +145,7 @@ class RaiFlowPipeline(DiffusionPipeline):
 
     model_cpu_offload_seq = "text_encoder->transformer->vae"
     _optional_components = ["image_encoder", "vae"]
-    _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds", "noise_pred", "encoder_hidden_states"]
+    _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds", "noise_pred", "hidden_states", "encoder_hidden_states"]
 
     def __init__(
         self,
@@ -586,7 +586,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                 Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
                 1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
                 usually at the expense of lower image quality.
-            raiflow_x0_pred_guidance_scale (`float`, *optional*, defaults to 4.0):
+            raiflow_x0_pred_guidance_scale (`float`, *optional*, defaults to 1.0):
                 Guidance scale used for classifier free guidence via the final image predictions.
             raiflow_guidence_base_shift (`float`, *optional*, defaults to 4.0):
                 Base shift used to scale the cfg value on the first timestep.
@@ -719,12 +719,18 @@ class RaiFlowPipeline(DiffusionPipeline):
         _, _, latent_height, latent_width = latents.shape
         _, encoder_seq_len, _ = prompt_embeds.shape
 
+        padded_height = latent_height + 2
+        padded_width = latent_width + 2
+
+        patched_height = padded_height // self.patch_size
+        patched_width = padded_width // self.patch_size
+        latents_seq_len = patched_height * patched_width
+
         # 5. Prepare timesteps
         scheduler_kwargs = {}
         if self.scheduler.config.get("use_dynamic_shifting", None) and mu is None:
-            image_seq_len = (latent_height // self.patch_size) * (latent_width // self.patch_size)
             mu = calculate_shift(
-                image_seq_len,
+                latents_seq_len,
                 self.scheduler.config.get("base_image_seq_len", 256),
                 self.scheduler.config.get("max_image_seq_len", 4096),
                 self.scheduler.config.get("base_shift", 0.5),
@@ -746,10 +752,9 @@ class RaiFlowPipeline(DiffusionPipeline):
         self._num_timesteps = len(timesteps)
         latents_dtype = latents.dtype
 
-        img_ids = None
         if combined_rotary_emb is None:
-            txt_ids = prepare_text_embed_ids(encoder_seq_len, device=prompt_embeds.device, dtype=prompt_embeds.dtype) 
-            img_ids = prepare_latent_image_ids((latent_height // self.patch_size), (latent_width // self.patch_size), latents.device, latents.dtype)
+            txt_ids = prepare_text_embed_ids(encoder_seq_len, device=prompt_embeds.device, dtype=prompt_embeds.dtype)
+            img_ids = prepare_latent_image_ids(patched_height, patched_width, latents.device, latents.dtype)
             combined_ids = torch.cat((txt_ids, img_ids), dim=0)
             combined_rotary_emb = self.transformer.pos_embed(combined_ids, freqs_dtype=torch.float32)
 
@@ -769,7 +774,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0])
 
-                noise_pred, encoder_hidden_states = self.transformer(
+                noise_pred, hidden_states, encoder_hidden_states = self.transformer(
                     hidden_states=latent_model_input,
                     encoder_hidden_states=prompt_embeds,
                     timestep=timestep,
@@ -871,6 +876,6 @@ class RaiFlowPipeline(DiffusionPipeline):
         self.maybe_free_model_hooks()
 
         if not return_dict:
-            return (image, encoder_hidden_states)
+            return (image, hidden_states, encoder_hidden_states)
 
-        return RaiFlowPipelineOutput(images=image, encoder_hidden_states=encoder_hidden_states)
+        return RaiFlowPipelineOutput(images=image, hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)

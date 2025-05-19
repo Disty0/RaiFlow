@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional
 
 import torch
 from torch import nn
@@ -10,8 +10,7 @@ from diffusers.utils import logging
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-def RaiFlowPosEmbed1D(shape: Union[torch.Size, Tuple[int]], device: torch.device, dtype: torch.dtype, secondary_seq_len: int, base_seq_len: int, sigmas: torch.FloatTensor) -> torch.FloatTensor:
-    batch_size, seq_len, _ = shape
+def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, device: torch.device, dtype: torch.dtype, secondary_seq_len: int, base_seq_len: int, sigmas: torch.FloatTensor) -> torch.FloatTensor:
     ones = torch.ones((batch_size, seq_len, 1), device=device, dtype=dtype)
 
     # Create 1D linspace tensors on the target device
@@ -28,8 +27,7 @@ def RaiFlowPosEmbed1D(shape: Union[torch.Size, Tuple[int]], device: torch.device
     return posed_embeds
 
 
-def RaiFlowPosEmbed2D(shape: Union[torch.Size, Tuple[int]], device: torch.device, dtype: torch.dtype) -> torch.FloatTensor:
-    batch_size, _, height, width = shape
+def RaiFlowPosEmbed2D(batch_size: int, height: int, width: int, device: torch.device, dtype: torch.dtype) -> torch.FloatTensor:
     max_dim = max(width, height)
 
     # create 1D linspace tensors on the target device

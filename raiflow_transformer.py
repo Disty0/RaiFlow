@@ -481,21 +481,21 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     ):
         super().__init__()
         self.gradient_checkpointing = False
-        self.out_channels = out_channels if out_channels is not None else in_channels
+        self.out_channels = out_channels if out_channels is not None else self.config.in_channels
         self.out_channels = self.out_channels * self.config.patch_size*self.config.patch_size
         self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
         self.base_seq_len = (self.config.sample_size // self.config.patch_size) * (self.config.sample_size // self.config.patch_size)
-        self.in_channels = 4 + ((in_channels + 4) * self.config.patch_size*self.config.patch_size) # patched + pos channels
+        self.patched_in_channels = 4 + ((self.config.in_channels + 4) * self.config.patch_size*self.config.patch_size) # patched + pos channels
         self.encoder_in_channels = encoder_in_channels + 4 # pos channels
 
         self.pos_embed = FluxPosEmbed(theta=10000, axes_dim=self.config.axes_dims_rope)
-        self.postemb_embedder = nn.Linear(4 + (4 * self.config.patch_size*self.config.patch_size), self.in_channels, bias=True)
+        self.postemb_embedder = nn.Linear(4 + (4 * self.config.patch_size*self.config.patch_size), self.patched_in_channels, bias=True)
 
         self.scale_in = nn.Parameter(torch.ones(self.config.in_channels))
         self.shift_in = nn.Parameter(torch.zeros(self.config.in_channels))
 
         self.skip_connect_embedder = RaiFlowFeedForward(
-            dim=self.in_channels * 2,
+            dim=self.patched_in_channels * 2,
             dim_out=self.inner_dim,
             num_attention_heads=self.config.num_attention_heads,
             attention_head_dim=self.config.attention_head_dim,
@@ -507,7 +507,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         )
 
         self.embedder = RaiFlowFeedForward(
-            dim=self.in_channels,
+            dim=self.patched_in_channels,
             dim_out=self.inner_dim,
             num_attention_heads=self.config.num_attention_heads,
             attention_head_dim=self.config.attention_head_dim,
@@ -660,15 +660,18 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 )
 
         batch_size, channels, height, width = hidden_states.shape
-        patched_height = height // self.config.patch_size
-        patched_width = width // self.config.patch_size
-        latents_seq_len = patched_height * patched_width
         _, encoder_seq_len, _ = encoder_hidden_states.shape
+        
+        padded_height = height + 2
+        padded_width = width + 2
 
-        img_ids = None
+        patched_height = padded_height // self.config.patch_size
+        patched_width = padded_width // self.config.patch_size
+        latents_seq_len = patched_height * patched_width
+
         if combined_rotary_emb is None:
-            txt_ids = prepare_text_embed_ids(encoder_seq_len, device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype) 
-            img_ids = prepare_latent_image_ids((height // self.config.patch_size), (width // self.config.patch_size), hidden_states.device, hidden_states.dtype)
+            txt_ids = prepare_text_embed_ids(encoder_seq_len, device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype)
+            img_ids = prepare_latent_image_ids(patched_height, patched_width, hidden_states.device, hidden_states.dtype)
             combined_ids = torch.cat((txt_ids, img_ids), dim=0)
             combined_rotary_emb = self.pos_embed(combined_ids, freqs_dtype=torch.float32)
 
@@ -681,13 +684,16 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         sigmas = sigmas.view(batch_size, 1, 1)
 
         posed_latents_2d = RaiFlowPosEmbed2D(
-            shape=hidden_states.shape,
+            batch_size=batch_size,
+            height=padded_height,
+            width=padded_width,
             device=hidden_states.device,
             dtype=hidden_states.dtype,
         )
 
         posed_latents_1d = RaiFlowPosEmbed1D(
-            shape=(batch_size, latents_seq_len, (channels*self.config.patch_size*self.config.patch_size)),
+            batch_size=batch_size,
+            seq_len=latents_seq_len,
             device=hidden_states.device,
             dtype=hidden_states.dtype,
             secondary_seq_len=encoder_seq_len,
@@ -695,8 +701,24 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             sigmas=sigmas,
         )
 
+        posed_encoder_1d = RaiFlowPosEmbed1D(
+            batch_size=batch_size,
+            seq_len=encoder_seq_len,
+            device=encoder_hidden_states.device,
+            dtype=hidden_states.dtype,
+            secondary_seq_len=latents_seq_len,
+            base_seq_len=self.config.encoder_base_seq_len,
+            sigmas=sigmas,
+        )
+
+        sigmas = sigmas.view(batch_size, 1, 1, 1)
+        sigmas_h = sigmas.expand(batch_size, self.config.in_channels, 1, width)
+        sigmas_w = sigmas.expand(batch_size, self.config.in_channels, padded_height, 1)
 
         hidden_states = torch.addcmul(self.shift_in.view(1,-1,1,1), hidden_states, self.scale_in.view(1,-1,1,1))
+        hidden_states = torch.cat([sigmas_h, hidden_states, sigmas_h], dim=2)
+        hidden_states = torch.cat([sigmas_w, hidden_states, sigmas_w], dim=3)
+
         hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
         hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.config.patch_size)
         hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
@@ -710,15 +732,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         skip_connect = self.norm_skip_connect(skip_connect)
 
         hidden_states = self.embedder(hidden_states, height=patched_height, width=patched_width)
-
-        posed_encoder_1d = RaiFlowPosEmbed1D(
-            shape=encoder_hidden_states.shape,
-            device=encoder_hidden_states.device,
-            dtype=hidden_states.dtype,
-            secondary_seq_len=latents_seq_len,
-            base_seq_len=self.config.encoder_base_seq_len,
-            sigmas=sigmas,
-        )
 
         encoder_hidden_states = self.norm_context_in(encoder_hidden_states)
         encoder_hidden_states = torch.cat([encoder_hidden_states, posed_encoder_1d], dim=2)
@@ -790,7 +803,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         hidden_states = self.norm_unembed(hidden_states)
         hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
         hidden_states = torch.addcmul(self.shift_out, hidden_states, self.scale_out)
-        output = unpack_1d_latents_to_2d(hidden_states, patch_size=self.config.patch_size, original_height=height, original_width=width)
+        hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.config.patch_size, original_height=padded_height, original_width=padded_width)
+        output = hidden_states[:, :, 1:-1, 1:-1] # remove attention sinks
 
         if flip_target: # latents - noise to noise - latents
             output = -output
@@ -800,6 +814,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             unscale_lora_layers(self, lora_scale)
 
         if not return_dict:
-            return (output, encoder_hidden_states)
+            return (output, hidden_states, encoder_hidden_states)
 
-        return RaiFlowTransformer2DModelOutput(sample=output, encoder_hidden_states=encoder_hidden_states)
+        return RaiFlowTransformer2DModelOutput(sample=output, hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
