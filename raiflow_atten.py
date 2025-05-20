@@ -25,9 +25,9 @@ class RaiFlowAttnProcessor2_0:
         batch_size, seq_len, _ = hidden_states.shape
 
         # `sample` projections.
-        query = attn.to_q(hidden_states)
-        key = attn.to_k(hidden_states)
-        value = F.gelu(attn.to_v(hidden_states), approximate="tanh")
+        query = F.gelu(attn.to_q(hidden_states), approximate="tanh")
+        key = F.gelu(attn.to_k(hidden_states), approximate="tanh")
+        value = attn.to_v(hidden_states)
 
         attn_heads = attn.heads
         head_dim = attn.inner_dim // attn_heads
@@ -46,9 +46,9 @@ class RaiFlowAttnProcessor2_0:
         if encoder_hidden_states is not None:
             _, encoder_seq_len, _ = encoder_hidden_states.shape
             total_seq_len = seq_len + encoder_seq_len
-            encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
-            encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
-            encoder_hidden_states_value_proj = F.gelu(attn.add_v_proj(encoder_hidden_states), approximate="tanh")
+            encoder_hidden_states_query_proj = F.gelu(attn.add_q_proj(encoder_hidden_states), approximate="tanh")
+            encoder_hidden_states_key_proj = F.gelu(attn.add_k_proj(encoder_hidden_states), approximate="tanh")
+            encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
 
             encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
                 batch_size, encoder_seq_len, attn_heads, head_dim
@@ -115,9 +115,9 @@ class RaiFlowCrossAttnProcessor2_0:
         _, secondary_seq_len, _ = encoder_hidden_states.shape
 
         # `sample` projections.
-        query = attn.to_q(hidden_states)
-        key = attn.to_k(encoder_hidden_states)
-        value = F.gelu(attn.to_v(encoder_hidden_states), approximate="tanh")
+        query = F.gelu(attn.to_q(hidden_states), approximate="tanh")
+        key = F.gelu(attn.to_k(encoder_hidden_states), approximate="tanh")
+        value = attn.to_v(encoder_hidden_states)
 
         attn_heads = attn.heads
         head_dim = attn.inner_dim // attn_heads
