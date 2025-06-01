@@ -3,7 +3,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
+from diffusers.image_processor import PipelineImageInput
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils import (
     is_torch_xla_available,
@@ -15,7 +15,6 @@ from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from transformers import Qwen2Tokenizer
-from diffusers.models.autoencoders import AutoencoderKL
 from .raiflow_image_encoder import RaiFlowImageEncoder
 
 from .raiflow_embedder import prepare_latent_image_ids, prepare_text_embed_ids
@@ -136,12 +135,10 @@ class RaiFlowPipeline(DiffusionPipeline):
             [Qwen2Tokenizer](https://huggingface.co/docs/transformers/main/model_doc/qwen2#transformers.Qwen2Tokenizer).
         image_encoder ([`RaiFlowImageEncoder`], *optional*):
             RaiFlow JPEG encoder to encode and decode images to and from latent representations.
-        vae ([`AutoencoderKL`], *optional*):
-            Variational Auto-Encoder (VAE) Model to encode and decode images to and from latent representations.
     """
 
-    model_cpu_offload_seq = "transformer->vae"
-    _optional_components = ["image_encoder", "vae"]
+    model_cpu_offload_seq = "transformer"
+    _optional_components = []
     _callback_tensor_inputs = ["latents", "prompt_embeds", "noise_pred", "hidden_states", "encoder_hidden_states"]
 
     def __init__(
@@ -149,8 +146,7 @@ class RaiFlowPipeline(DiffusionPipeline):
         transformer: RaiFlowTransformer2DModel,
         scheduler: FlowMatchEulerDiscreteScheduler,
         tokenizer: Qwen2Tokenizer,
-        image_encoder: RaiFlowImageEncoder = None,
-        vae: AutoencoderKL = None,
+        image_encoder: RaiFlowImageEncoder,
     ):
         super().__init__()
 
@@ -159,20 +155,16 @@ class RaiFlowPipeline(DiffusionPipeline):
             scheduler=scheduler,
             tokenizer=tokenizer,
             image_encoder=image_encoder,
-            vae=vae,
         )
 
         self.patch_size = (
             self.transformer.config.patch_size if getattr(self, "transformer", None) is not None else 2
         )
 
-        if getattr(self, "vae", None) is not None:
-            self.latent_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
-            self.image_processor = VaeImageProcessor(vae_scale_factor=self.latent_scale_factor * self.patch_size)
-        elif getattr(self, "image_encoder", None) is not None:
+        if getattr(self, "image_encoder", None) is not None:
             self.latent_scale_factor = self.image_encoder.config.block_size
         else:
-            self.latent_scale_factor = 8
+            self.latent_scale_factor = 16
 
         self.default_sample_size = (
             self.transformer.config.sample_size if getattr(self, "transformer", None) is not None else 128
@@ -623,41 +615,15 @@ class RaiFlowPipeline(DiffusionPipeline):
                 if XLA_AVAILABLE:
                     xm.mark_step()
 
-        # Offload all models before decoding
+        # Offload all models
         self.maybe_free_model_hooks()
 
         if output_type == "latent":
             image = latents
-        elif getattr(self, "vae", None) is not None:
-            latents = latents.to(dtype=torch.float32)
-
-            if self.vae.config.latents_std is not None:
-                latents = latents * torch.tensor(self.vae.config.latents_std, device=latents.device, dtype=torch.float32).view(1,-1,1,1)
-            elif self.vae.config.scaling_factor is not None and self.vae.config.scaling_factor != 1:
-                latents = latents / self.vae.config.scaling_factor
-
-            if self.vae.config.latents_mean is not None:
-                latents = latents + torch.tensor(self.vae.config.latents_mean, device=latents.device, dtype=torch.float32).view(1,-1,1,1)
-            elif self.vae.config.shift_factor is not None and self.vae.config.shift_factor != 0:
-                latents = latents + self.vae.config.shift_factor
-
-            if self.vae.config.force_upcast and dtype == torch.float16:
-                self.vae = self.vae.to(dtype=torch.float32)
-                image = self.vae.decode(latents, return_dict=False)[0]
-                self.vae = self.vae.to(dtype=dtype)
-            else:
-                latents = latents.to(dtype)
-                image = self.vae.decode(latents, return_dict=False)[0]
-            image = self.image_processor.postprocess(image, output_type=output_type)
-        elif getattr(self, "image_encoder", None) is not None:
+        else:
             if latents.device.type in {"xpu", "mps"}:
                 latents = latents.to("cpu")
             image = self.image_encoder.decode(latents, return_type=output_type)
-        else:
-            raise RuntimeError("Neither a VAE or an Image Encoder is found to decode the latents")
-
-        # Offload all models
-        self.maybe_free_model_hooks()
 
         if not return_dict:
             return (image, hidden_states, encoder_hidden_states)
