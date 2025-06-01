@@ -14,7 +14,7 @@ from diffusers.utils import (
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
-from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+from transformers import Qwen2Tokenizer
 from diffusers.models.autoencoders import AutoencoderKL
 from .raiflow_image_encoder import RaiFlowImageEncoder
 
@@ -131,28 +131,24 @@ class RaiFlowPipeline(DiffusionPipeline):
             Conditional Transformer (EMMDit) architecture to denoise the encoded image latents.
         scheduler ([`FlowMatchEulerDiscreteScheduler`]):
             A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
-        text_encoder ([`Qwen2VLForConditionalGeneration`]):
-            [Qwen2VLForConditionalGeneration](https://huggingface.co/docs/transformers/main/model_doc/qwen2_vl#transformers.Qwen2VLForConditionalGeneration),
-            specifically the [2B](https://huggingface.co/Qwen/Qwen2-VL-2B) variant.
-        tokenizer (`Qwen2VLProcessor`):
+        tokenizer (`Qwen2Tokenizer`):
             Tokenizer of class
-            [Qwen2VLProcessor](https://huggingface.co/docs/transformers/main/model_doc/qwen2_vl#transformers.Qwen2VLProcessor).
+            [Qwen2Tokenizer](https://huggingface.co/docs/transformers/main/model_doc/qwen2#transformers.Qwen2Tokenizer).
         image_encoder ([`RaiFlowImageEncoder`], *optional*):
             RaiFlow JPEG encoder to encode and decode images to and from latent representations.
         vae ([`AutoencoderKL`], *optional*):
             Variational Auto-Encoder (VAE) Model to encode and decode images to and from latent representations.
     """
 
-    model_cpu_offload_seq = "text_encoder->transformer->vae"
+    model_cpu_offload_seq = "transformer->vae"
     _optional_components = ["image_encoder", "vae"]
-    _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds", "noise_pred", "hidden_states", "encoder_hidden_states"]
+    _callback_tensor_inputs = ["latents", "prompt_embeds", "noise_pred", "hidden_states", "encoder_hidden_states"]
 
     def __init__(
         self,
         transformer: RaiFlowTransformer2DModel,
         scheduler: FlowMatchEulerDiscreteScheduler,
-        text_encoder: Qwen2VLForConditionalGeneration,
-        tokenizer: Qwen2VLProcessor,
+        tokenizer: Qwen2Tokenizer,
         image_encoder: RaiFlowImageEncoder = None,
         vae: AutoencoderKL = None,
     ):
@@ -161,7 +157,6 @@ class RaiFlowPipeline(DiffusionPipeline):
         self.register_modules(
             transformer=transformer,
             scheduler=scheduler,
-            text_encoder=text_encoder,
             tokenizer=tokenizer,
             image_encoder=image_encoder,
             vae=vae,
@@ -183,86 +178,21 @@ class RaiFlowPipeline(DiffusionPipeline):
             self.transformer.config.sample_size if getattr(self, "transformer", None) is not None else 128
         )
 
-    def _get_qwen2_prompt_embeds(
-        self,
-        prompt: Union[str, List[str]] = None,
-        prompt_images: Optional[PipelineImageInput] = None,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
-        max_sequence_length: int = 1024,
-    ) -> List[torch.FloatTensor]:
-        device = device or self._execution_device
-        dtype = dtype or self.text_encoder.dtype
-
-        if prompt_images is None and (prompt == "" or prompt == [""]):
-            # encoding the empty embed via the text encoder is the same as using zeros
-            return [torch.zeros((1, self.text_encoder.config.hidden_size), device=device, dtype=dtype)]
-
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-
-        if prompt_images is not None and not isinstance(prompt_images, list):
-            prompt_images = [prompt_images]
-
-        inputs = self.tokenizer(
-            text=prompt.copy(), # tokenizer overwrites
-            images=prompt_images,
-            padding="longest",
-            max_length=max_sequence_length,
-            truncation=True,
-            add_special_tokens=True,
-            return_tensors="pt"
-        )
-
-        input_ids = inputs.input_ids
-        untruncated_ids = self.tokenizer(text=prompt.copy(), images=prompt_images, padding="longest", return_tensors="pt").input_ids
-
-        if untruncated_ids.shape[-1] >= input_ids.shape[-1] and not torch.equal(input_ids, untruncated_ids):
-            removed_text = self.tokenizer.batch_decode(untruncated_ids[:, max_sequence_length :])
-            logger.warning(
-                "The following part of your input was truncated because `max_sequence_length` is set to "
-                f" {max_sequence_length} tokens: {removed_text}"
-            )
-
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        prompt_embeds = self.text_encoder(**inputs, output_hidden_states=True).hidden_states[-2]
-        prompt_embeds = prompt_embeds.to(device, dtype=dtype)
-
-        attention_mask = inputs["attention_mask"].to(device, dtype=dtype)
-        prompt_embeds = prompt_embeds * attention_mask.unsqueeze(-1).expand(prompt_embeds.shape)
-
-        prompt_embeds_list = []
-        for i in range(prompt_embeds.size(0)):
-            count = 0
-            for j in reversed(attention_mask[i]):
-                if j == 0:
-                    break
-                count += 1
-            count = max(count,1)
-            prompt_embeds_list.append(prompt_embeds[i, -count:])
-
-        return prompt_embeds_list
-
     def encode_prompt(
         self,
         prompt: Union[str, List[str]],
-        prompt_images: Optional[PipelineImageInput] = None,
         device: Optional[torch.device] = None,
         num_images_per_prompt: int = 1,
         do_classifier_free_guidance: bool = True,
         negative_prompt: Optional[Union[str, List[str]]] = None,
-        negative_prompt_images: Optional[PipelineImageInput] = None,
-        prompt_embeds: Optional[torch.FloatTensor] = None,
-        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         max_sequence_length: int = 1024,
-        min_sequence_length: int = 256,
+        pad_to_multiple_of: int = 256,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
         r"""
 
         Args:
             prompt (`str` or `List[str]`, *optional*):
                 prompt to be encoded
-            prompt_images ('PipelineImageInput', *optional*):
-                images to be encoded
             device: (`torch.device`):
                 torch device
             num_images_per_prompt (`int`):
@@ -270,149 +200,58 @@ class RaiFlowPipeline(DiffusionPipeline):
             do_classifier_free_guidance (`bool`):
                 whether to use classifier free guidance or not
             negative_prompt (`str` or `List[str]`, *optional*):
-                The prompt or prompts not to guide the image generation. If not defined, one has to pass
-                `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
-                less than `1`).
-            negative_prompt_images (`PipelineImageInput`, *optional*):
-                The image or images not to guide the image generation. If not defined, one has to pass
-                `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
-                less than `1`).
-            prompt_embeds (`torch.FloatTensor`, *optional*):
-                Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
-                provided, text embeddings will be generated from `prompt` input argument.
-            negative_prompt_embeds (`torch.FloatTensor`, *optional*):
-                Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
-                weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
-                argument.
+                The prompt or prompts not to guide the image generation.
+                Ignored when not using guidance (i.e., ignored if `guidance_scale` is less than `1`).
             max_sequence_length (`int` defaults to 1024): Maximum sequence length to use with the `prompt`.
-            min_sequence_length (`int` defaults to 256): Minimum sequence length to use with the `prompt`.
+            pad_to_multiple_of (`int` defaults to 256): Pad the sequence length to a multiple of this value`.
         """
         device = device or self._execution_device
 
+        prompt = prompt or self.tokenizer.decode(self.transformer.config.pad_token_id)
         prompt = [prompt] if isinstance(prompt, str) else prompt
-        if prompt is not None:
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
+        batch_size = len(prompt)
 
-        if prompt_embeds is None:
+        if do_classifier_free_guidance:
+            negative_prompt = negative_prompt or self.tokenizer.decode(self.transformer.config.pad_token_id)
+            negative_prompt = [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+            negative_prompt_len = len(negative_prompt)
 
-            prompt_embeds = self._get_qwen2_prompt_embeds(
-                prompt=prompt,
-                prompt_images=prompt_images,
-                max_sequence_length=max_sequence_length,
-                device=device,
-            )
+            if negative_prompt_len == 1 and batch_size != 1:
+                negative_prompt = negative_prompt * batch_size
+            elif negative_prompt_len != batch_size:
+                raise ValueError(f"number of prompts and negative prompts must be the same but got {batch_size} and {negative_prompt_len}")
 
-            # Offload all models if negative embeds are provided
-            if negative_prompt_embeds is not None:
-                self.maybe_free_model_hooks()
+            negative_prompt.extend(prompt)
+            prompt = negative_prompt
 
-            max_len = 0
-            for embed in prompt_embeds:
-                max_len = max(max_len, embed.shape[0])
-            max_len = max(max_len, min_sequence_length)
-            if max_len % 256 != 0: # make it a multiple of 256
-                max_len +=  256 - (max_len % 256)
+        prompt_embeds = self.tokenizer(
+            text=prompt,
+            padding="longest",
+            pad_to_multiple_of=pad_to_multiple_of,
+            max_length=max_sequence_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_tensors="pt"
+        ).input_ids
 
-            embed_dim = prompt_embeds[0].shape[-1]
-            for i in range(len(prompt_embeds)):
-                seq_len = prompt_embeds[i].shape[0]
-                if seq_len != max_len:
-                    prompt_embeds[i] = torch.cat(
-                        [
-                            prompt_embeds[i],
-                            torch.ones((max_len-seq_len, embed_dim), device=prompt_embeds[i].device, dtype=prompt_embeds[i].dtype)
-                        ],
-                        dim=0,
-                    )
-
-            prompt_embeds = torch.stack(prompt_embeds, dim=0)
-
-            _, seq_len, _ = prompt_embeds.shape
+        if num_images_per_prompt != 1:
             # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
-            prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-            prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+            batch_size, seq_len = prompt_embeds.shape
+            prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt)
+            prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len)
+            prompt_embeds = prompt_embeds.to(device)
 
-        if do_classifier_free_guidance and negative_prompt_embeds is None:
-            negative_prompt = negative_prompt or ""
-
-            # normalize str to list
-            negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
-
-            if prompt is not None and type(prompt) is not type(negative_prompt):
-                raise TypeError(
-                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
-                    f" {type(prompt)}."
-                )
-            elif batch_size != len(negative_prompt):
-                raise ValueError(
-                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
-                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
-                    " the batch size of `prompt`."
-                )
-
-            negative_prompt_embeds = self._get_qwen2_prompt_embeds(
-                prompt=negative_prompt,
-                prompt_images=negative_prompt_images,
-                max_sequence_length=max_sequence_length,
-                device=device,
-            )
-
-            # Offload all models
-            self.maybe_free_model_hooks()
-
-            max_len = 0
-            for embed in negative_prompt_embeds:
-                max_len = max(max_len, embed.shape[0])
-            max_len = max(max_len, prompt_embeds.shape[1])
-            if max_len % 256 != 0: # make it a multiple of 256
-                max_len +=  256 - (max_len % 256)
-
-            embed_dim = negative_prompt_embeds[0].shape[-1]
-            for i in range(len(negative_prompt_embeds)):
-                seq_len = negative_prompt_embeds[i].shape[0]
-                if seq_len != max_len:
-                    negative_prompt_embeds[i] = torch.cat(
-                        [
-                            negative_prompt_embeds[i],
-                            torch.ones((max_len-seq_len, embed_dim), device=negative_prompt_embeds[i].device, dtype=negative_prompt_embeds[i].dtype)
-                        ],
-                        dim=0,
-                    )
-
-            negative_prompt_embeds = torch.stack(negative_prompt_embeds, dim=0)
-
-            _, seq_len, _ = negative_prompt_embeds.shape
-            # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
-            negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
-            negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
-
-            if negative_prompt_embeds.shape[1] > prompt_embeds.shape[1]:
-                batch_size, seq_len, embed_dim = prompt_embeds.shape
-                prompt_embeds = torch.cat(
-                        [
-                            prompt_embeds,
-                            torch.ones((batch_size, negative_prompt_embeds.shape[1]-seq_len, embed_dim), device=prompt_embeds[i].device, dtype=prompt_embeds[i].dtype)
-                        ],
-                        dim=1,
-                    )
-
-        return prompt_embeds, negative_prompt_embeds
+        return prompt_embeds
 
     def check_inputs(
         self,
         prompt,
         height,
         width,
-        prompt_images=None,
         negative_prompt=None,
-        negative_prompt_images=None,
-        prompt_embeds=None,
-        negative_prompt_embeds=None,
         callback_on_step_end_tensor_inputs=None,
         max_sequence_length=None,
-        min_sequence_length=None,
+        pad_to_multiple_of=None,
     ):
         if (
             height % (self.latent_scale_factor * self.patch_size) != 0
@@ -423,6 +262,9 @@ class RaiFlowPipeline(DiffusionPipeline):
                 f"You can use height {height - height % (self.latent_scale_factor * self.patch_size)} and width {width - width % (self.latent_scale_factor * self.patch_size)}."
             )
 
+        if isinstance(prompt, list) and isinstance(negative_prompt, list) and len(negative_prompt) != 1 and len(prompt) != len(negative_prompt):
+            raise ValueError(f"number of prompts and negative prompts must be the same but got {len(prompt)} and {len(negative_prompt)}")
+
         if callback_on_step_end_tensor_inputs is not None and not all(
             k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
         ):
@@ -430,40 +272,14 @@ class RaiFlowPipeline(DiffusionPipeline):
                 f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
             )
 
-        if prompt is not None and prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
-                " only forward one of the two."
-            )
-        elif prompt is None and prompt_embeds is None:
-            raise ValueError(
-                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
-            )
-        elif prompt is not None and (not isinstance(prompt, str) and not isinstance(prompt, list)):
-            raise ValueError(f"`prompt` has to be of type `str` or `list` but is {type(prompt)}")
-
-        if negative_prompt is not None and negative_prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `negative_prompt`: {negative_prompt} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
-            )
-
-        if prompt_embeds is not None and negative_prompt_embeds is not None:
-            if prompt_embeds.shape != negative_prompt_embeds.shape:
-                raise ValueError(
-                    "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
-                    f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
-                    f" {negative_prompt_embeds.shape}."
-                )
-
         if max_sequence_length is not None and not isinstance(max_sequence_length, int):
             raise ValueError(
                 f"`max_sequence_length` must be an integer but got: {type(max_sequence_length)}"
             )
 
-        if min_sequence_length is not None and not isinstance(min_sequence_length, int):
+        if pad_to_multiple_of is not None and not isinstance(pad_to_multiple_of, int):
             raise ValueError(
-                f"`min_sequence_length` must be an integer but got: {type(min_sequence_length)}"
+                f"`pad_to_multiple_of` must be an integer but got: {type(pad_to_multiple_of)}"
             )
 
     def prepare_latents(
@@ -532,8 +348,7 @@ class RaiFlowPipeline(DiffusionPipeline):
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
-        prompt: Union[str, List[str]] = None,
-        prompt_images: Optional[PipelineImageInput] = None,
+        prompt: Union[str, List[str]],
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_inference_steps: int = 30,
@@ -542,12 +357,9 @@ class RaiFlowPipeline(DiffusionPipeline):
         raiflow_x0_pred_guidance_scale: float = 1.0,
         raiflow_guidence_base_shift: float = 4.0,
         negative_prompt: Optional[Union[str, List[str]]] = None,
-        negative_prompt_images: Optional[PipelineImageInput] = None,
         num_images_per_prompt: Optional[int] = 1,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.FloatTensor] = None,
-        prompt_embeds: Optional[torch.FloatTensor] = None,
-        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         combined_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         image_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         text_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
@@ -556,8 +368,8 @@ class RaiFlowPipeline(DiffusionPipeline):
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
-        max_sequence_length: int = 1024,
-        min_sequence_length: int = 256,
+        max_sequence_length: int = None,
+        pad_to_multiple_of: int = None,
         mu: Optional[float] = None,
     ) -> Union[RaiFlowPipelineOutput, Tuple[PipelineImageInput]]:
         r"""
@@ -565,10 +377,7 @@ class RaiFlowPipeline(DiffusionPipeline):
 
         Args:
             prompt (`str` or `List[str]`, *optional*):
-                The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.
-                instead.
-            prompt_images ('PipelineImageInput', *optional*):
-                The image or images to guide the image generation.
+                The prompt or prompts to guide the image generation.
             height (`int`, *optional*, defaults to self.transformer.config.sample_size * self.latent_scale_factor):
                 The height in pixels of the generated image. This is set to 1024 by default for the best results.
             width (`int`, *optional*, defaults to self.transformer.config.sample_size * self.latent_scale_factor):
@@ -591,12 +400,8 @@ class RaiFlowPipeline(DiffusionPipeline):
             raiflow_guidence_base_shift (`float`, *optional*, defaults to 4.0):
                 Base shift used to scale the cfg value on the first timestep.
             negative_prompt (`str` or `List[str]`, *optional*):
-                The prompt or prompts not to guide the image generation. If not defined, one has to pass
-                `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
-                less than `1`).
-            negative_prompt_images (`PipelineImageInput`, *optional*):
-                The image or images not to guide the image generation. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
-                less than `1`).
+                The prompt or prompts not to guide the image generation.
+                Ignored when not using guidance (i.e., ignored if `guidance_scale` is less than `1`).
             num_images_per_prompt (`int`, *optional*, defaults to 1):
                 The number of images to generate per prompt.
             generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
@@ -606,13 +411,6 @@ class RaiFlowPipeline(DiffusionPipeline):
                 Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image
                 generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
                 tensor will ge generated by sampling using the supplied random `generator`.
-            prompt_embeds (`torch.FloatTensor`, *optional*):
-                Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
-                provided, text embeddings will be generated from `prompt` input argument.
-            negative_prompt_embeds (`torch.FloatTensor`, *optional*):
-                Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
-                weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
-                argument.
             combined_rotary_emb (Tuple[`torch.FloatTensor`] of shape `(combined_sequence_len, 3)`, *optional*):
                 Used for rotary positional embeddings. combined_sequence_len is encoder_seq_len + latents_seq_len.
             image_rotary_emb (Tuple[`torch.FloatTensor`] of shape `(latents_seq_len, 3)`, *optional*):
@@ -636,8 +434,8 @@ class RaiFlowPipeline(DiffusionPipeline):
                 The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
                 will be passed as `callback_kwargs` argument. You will only be able to include variables listed in the
                 `._callback_tensor_inputs` attribute of your pipeline class.
-            max_sequence_length (`int` defaults to 1024): Maximum sequence length to use with the `prompt`.
-            min_sequence_length (`int` defaults to 256): Minimum sequence length to use with the `prompt`.
+            max_sequence_length (`int` defaults to None): Maximum sequence length to use with the `prompt`.
+            pad_to_multiple_of (`int` defaults to None): Pad the sequence length to a multiple of this value`.
             mu (`float`, *optional*): `mu` value used for `dynamic_shifting`.
 
         Examples:
@@ -650,20 +448,18 @@ class RaiFlowPipeline(DiffusionPipeline):
 
         height = height or self.default_sample_size * self.latent_scale_factor
         width = width or self.default_sample_size * self.latent_scale_factor
+        max_sequence_length = max_sequence_length or self.transformer.config.encoder_max_sequence_length
+        pad_to_multiple_of = pad_to_multiple_of or self.transformer.config.pad_to_multiple_of
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
             prompt,
             height,
             width,
-            prompt_images=prompt_images,
             negative_prompt=negative_prompt,
-            negative_prompt_images=negative_prompt_images,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
             callback_on_step_end_tensor_inputs=callback_on_step_end_tensor_inputs,
             max_sequence_length=max_sequence_length,
-            min_sequence_length=min_sequence_length,
+            pad_to_multiple_of=pad_to_multiple_of,
         )
 
         self._guidance_scale = guidance_scale
@@ -674,34 +470,23 @@ class RaiFlowPipeline(DiffusionPipeline):
         self._interrupt = False
 
         # 2. Define call parameters
-        if prompt is not None and isinstance(prompt, str):
+        if isinstance(prompt, str):
             batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
         else:
-            batch_size = prompt_embeds.shape[0]
+            batch_size = len(prompt)
 
         device = self._execution_device
+        dtype = self.transformer.embed_tokens.weight.dtype # pipe can be quantized
 
-        (
-            prompt_embeds,
-            negative_prompt_embeds,
-        ) = self.encode_prompt(
+        prompt_embeds = self.encode_prompt(
             prompt=prompt,
-            prompt_images=prompt_images,
             negative_prompt=negative_prompt,
-            negative_prompt_images=negative_prompt_images,
             do_classifier_free_guidance=self.do_classifier_free_guidance,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
             device=device,
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_sequence_length,
-            min_sequence_length=min_sequence_length,
+            pad_to_multiple_of=pad_to_multiple_of,
         )
-
-        if self.do_classifier_free_guidance:
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
 
         # 4. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels
@@ -710,14 +495,15 @@ class RaiFlowPipeline(DiffusionPipeline):
             num_channels_latents,
             height,
             width,
-            prompt_embeds.dtype,
+            dtype,
             device,
             generator,
             latents,
         )
 
         _, _, latent_height, latent_width = latents.shape
-        _, encoder_seq_len, _ = prompt_embeds.shape
+        _, encoder_seq_len = prompt_embeds.shape
+        encoder_seq_len = encoder_seq_len + 2
 
         padded_height = latent_height + 2
         padded_width = latent_width + 2
@@ -750,11 +536,10 @@ class RaiFlowPipeline(DiffusionPipeline):
         )
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
-        latents_dtype = latents.dtype
 
         if combined_rotary_emb is None:
-            txt_ids = prepare_text_embed_ids(encoder_seq_len, device=prompt_embeds.device, dtype=prompt_embeds.dtype)
-            img_ids = prepare_latent_image_ids(patched_height, patched_width, latents.device, latents.dtype)
+            txt_ids = prepare_text_embed_ids(encoder_seq_len, device, dtype)
+            img_ids = prepare_latent_image_ids(patched_height, patched_width, device, dtype)
             combined_ids = torch.cat((txt_ids, img_ids), dim=0)
             combined_rotary_emb = self.transformer.pos_embed(combined_ids, freqs_dtype=torch.float32)
 
@@ -819,8 +604,8 @@ class RaiFlowPipeline(DiffusionPipeline):
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(noise_pred, t.float(), latents.float(), return_dict=False)[0]
-                latents = latents.to(latents_dtype)
-                noise_pred = noise_pred.to(latents_dtype) # for callback
+                latents = latents.to(dtype)
+                noise_pred = noise_pred.to(dtype) # for callback
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -830,7 +615,6 @@ class RaiFlowPipeline(DiffusionPipeline):
 
                     latents = callback_outputs.pop("latents", latents)
                     prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
-                    negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
 
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
@@ -857,12 +641,12 @@ class RaiFlowPipeline(DiffusionPipeline):
             elif self.vae.config.shift_factor is not None and self.vae.config.shift_factor != 0:
                 latents = latents + self.vae.config.shift_factor
 
-            if self.vae.config.force_upcast and latents_dtype == torch.float16:
+            if self.vae.config.force_upcast and dtype == torch.float16:
                 self.vae = self.vae.to(dtype=torch.float32)
                 image = self.vae.decode(latents, return_dict=False)[0]
-                self.vae = self.vae.to(dtype=latents_dtype)
+                self.vae = self.vae.to(dtype=dtype)
             else:
-                latents = latents.to(latents_dtype)
+                latents = latents.to(dtype)
                 image = self.vae.decode(latents, return_dict=False)[0]
             image = self.image_processor.postprocess(image, output_type=output_type)
         elif getattr(self, "image_encoder", None) is not None:
