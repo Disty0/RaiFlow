@@ -454,6 +454,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     """
 
     _supports_gradient_checkpointing = True
+    _keep_in_fp32_modules = ["embedder", "unembedder", "scale_in", "shift_in", "scale_out", "shift_out", "norm_unembed"]
 
     @register_to_config
     def __init__(
@@ -602,6 +603,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
         flip_target: bool = True,
+        use_timesteps_sigmas: bool = True,
     ) -> Union[RaiFlowTransformer2DModelOutput, Tuple[torch.FloatTensor]]:
         """
         The [`RaiFlowTransformer2DModel`] forward method.
@@ -671,7 +673,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         if text_rotary_emb is None:
             text_rotary_emb = (combined_rotary_emb[0][: encoder_seq_len], combined_rotary_emb[1][: encoder_seq_len])
 
-        sigmas = timestep.to(dtype=dtype) / self.config.num_train_timesteps
+        sigmas = timestep.to(dtype=dtype)
+        if use_timesteps_sigmas:
+            sigmas = sigmas / self.config.num_train_timesteps
         sigmas = sigmas.view(batch_size, 1, 1)
         sigmas_enc = sigmas.expand(batch_size, 1, self.inner_dim)
 
@@ -704,17 +708,19 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         )
 
         sigmas = sigmas.view(batch_size, 1, 1, 1)
-        sigmas_h = sigmas.expand(batch_size, self.config.in_channels, 1, width)
-        sigmas_w = sigmas.expand(batch_size, self.config.in_channels, padded_height, 1)
+        sigmas_h = sigmas.expand(batch_size, self.config.in_channels, 1, width).float()
+        sigmas_w = sigmas.expand(batch_size, self.config.in_channels, padded_height, 1).float()
 
-        hidden_states = torch.addcmul(self.shift_in.view(1,-1,1,1), hidden_states, self.scale_in.view(1,-1,1,1))
-        hidden_states = torch.cat([sigmas_h, hidden_states, sigmas_h], dim=2)
-        hidden_states = torch.cat([sigmas_w, hidden_states, sigmas_w], dim=3)
+        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+            hidden_states = hidden_states.float() # embedder wants precision
+            hidden_states = torch.addcmul(self.shift_in.view(1,-1,1,1), hidden_states, self.scale_in.view(1,-1,1,1))
+            hidden_states = torch.cat([sigmas_h, hidden_states, sigmas_h], dim=2)
+            hidden_states = torch.cat([sigmas_w, hidden_states, sigmas_w], dim=3)
 
-        hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
-        hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.config.patch_size)
-        hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
-        hidden_states = self.embedder(hidden_states, height=patched_height, width=patched_width)
+            hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
+            hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.config.patch_size)
+            hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
+            hidden_states = self.embedder(hidden_states, height=patched_height, width=patched_width).to(dtype=dtype)
 
         encoder_hidden_states = self.embed_tokens(encoder_hidden_states)
         encoder_hidden_states = torch.cat([sigmas_enc, encoder_hidden_states, sigmas_enc], dim=1)
@@ -782,11 +788,13 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     width=patched_width,
                 )
 
-        hidden_states = self.norm_unembed(hidden_states)
-        hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
-        hidden_states = torch.addcmul(self.shift_out, hidden_states, self.scale_out)
-        hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.config.patch_size, original_height=padded_height, original_width=padded_width)
-        output = hidden_states[:, :, 1:-1, 1:-1] # remove attention sinks
+        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+            hidden_states = hidden_states.float() # optional extra precision for dct
+            hidden_states = self.norm_unembed(hidden_states)
+            hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
+            hidden_states = torch.addcmul(self.shift_out, hidden_states, self.scale_out)
+            hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.config.patch_size, original_height=padded_height, original_width=padded_width)
+            output = hidden_states[:, :, 1:-1, 1:-1] # remove attention sinks
 
         if flip_target: # latents - noise to noise - latents
             output = -output
