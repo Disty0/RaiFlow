@@ -549,18 +549,17 @@ class RaiFlowPipeline(DiffusionPipeline):
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-                timestep = t.expand(latent_model_input.shape[0])
+                timesteps = self.scheduler.sigmas[self.scheduler.step_index or i].to(device, dtype=dtype).expand(latent_model_input.shape[0])
 
                 noise_pred, hidden_states, encoder_hidden_states = self.transformer(
                     hidden_states=latent_model_input,
                     encoder_hidden_states=prompt_embeds,
-                    timestep=timestep,
+                    timestep=timesteps,
                     combined_rotary_emb=combined_rotary_emb,
                     image_rotary_emb=image_rotary_emb,
                     text_rotary_emb=text_rotary_emb,
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
-                    flip_target=True,
                 )
                 noise_pred = noise_pred.float()
 
@@ -571,7 +570,6 @@ class RaiFlowPipeline(DiffusionPipeline):
                     #noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                     """
-                    current_sigma = self.scheduler.sigmas[self.scheduler.step_index or i]
                     if t == self.scheduler.config.num_train_timesteps and self.raiflow_guidence_base_shift > 0:
                         # downscale cfg at the first step to fix everything becoming black issue
                         downscaled_guidance_scale = (self.guidance_scale / 2) / (self.raiflow_guidence_base_shift / self.scheduler.shift)
@@ -588,10 +586,10 @@ class RaiFlowPipeline(DiffusionPipeline):
                         noise_pred_uncond_cfg = noise_pred_uncond
                         x0_pred_guidance_scale = self.raiflow_x0_pred_guidance_scale + downscaled_guidance_scale
 
-                    x0_pred_text = latents - (noise_pred_text_cfg * current_sigma)
-                    x0_pred_uncond = latents - (noise_pred_uncond_cfg * current_sigma)
+                    x0_pred_text = latents - (noise_pred_text_cfg * timesteps)
+                    x0_pred_uncond = latents - (noise_pred_uncond_cfg * timesteps)
 
-                    noise_pred = noise_pred_text_cfg - x0_pred_guidance_scale * ((x0_pred_text - x0_pred_uncond) * current_sigma)
+                    noise_pred = noise_pred_text_cfg - x0_pred_guidance_scale * ((x0_pred_text - x0_pred_uncond) * timesteps)
                     """
 
                 # compute the previous noisy sample x_t -> x_t-1

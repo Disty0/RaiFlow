@@ -488,14 +488,12 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
         self.base_seq_len = (self.config.sample_size // self.config.patch_size) * (self.config.sample_size // self.config.patch_size)
         self.patched_in_channels = 4 + ((self.config.in_channels + 4) * self.config.patch_size*self.config.patch_size) # patched + pos channels
-        self.encoder_in_channels = self.inner_dim + 4 # pos channels
+        self.encoder_in_channels = 4 + self.inner_dim # pos channels
 
         self.pos_embed = FluxPosEmbed(theta=10000, axes_dim=self.config.axes_dims_rope)
-        self.postemb_embedder = nn.Linear(4 + (4 * self.config.patch_size*self.config.patch_size), self.patched_in_channels, bias=True)
 
         self.scale_in = nn.Parameter(torch.ones(self.config.in_channels))
         self.shift_in = nn.Parameter(torch.zeros(self.config.in_channels))
-
         self.embedder = RaiFlowFeedForward(
             dim=self.patched_in_channels,
             dim_out=self.inner_dim,
@@ -596,14 +594,12 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self,
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: torch.Tensor,
-        timestep: torch.LongTensor,
+        timestep: torch.FloatTensor,
         combined_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         image_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         text_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
-        flip_target: bool = True,
-        use_timesteps_sigmas: bool = True,
     ) -> Union[RaiFlowTransformer2DModelOutput, Tuple[torch.FloatTensor]]:
         """
         The [`RaiFlowTransformer2DModel`] forward method.
@@ -614,7 +610,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             encoder_hidden_states (`torch.Tensor` of shape `(batch size, sequence_len)`):
                 Input IDs from the tokenizer to use.
             timestep (`torch.LongTensor`):
-                Used to indicate denoising step.
+                Used to indicate the current denoising step.
             combined_rotary_emb (Tuple[`torch.FloatTensor`] of shape `(combined_sequence_len, 3)`, *optional*):
                 Used for rotary positional embeddings. combined_sequence_len is encoder_seq_len + latents_seq_len.
             image_rotary_emb (Tuple[`torch.FloatTensor`] of shape `(latents_seq_len, 3)`, *optional*):
@@ -626,8 +622,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             return_dict (`bool`, *optional*, defaults to `True`):
                 Whether or not to return a [`RaiFlowTransformer2DModelOutput`] instead of a plain
                 tuple.
-            flip_target (`bool`, *optional*, defaults to `True`):
-                Whether or not to flip the outputs for inference.
 
         Returns:
             If `return_dict` is True, an [`RaiFlowTransformer2DModelOutput`] is returned, otherwise a
@@ -673,10 +667,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         if text_rotary_emb is None:
             text_rotary_emb = (combined_rotary_emb[0][: encoder_seq_len], combined_rotary_emb[1][: encoder_seq_len])
 
-        sigmas = timestep.to(dtype=dtype)
-        if use_timesteps_sigmas:
-            sigmas = sigmas / self.config.num_train_timesteps
-        sigmas = sigmas.view(batch_size, 1, 1)
+        sigmas = timestep.view(batch_size, 1, 1)
         sigmas_enc = sigmas.expand(batch_size, 1, self.inner_dim)
 
         posed_latents_2d = RaiFlowPosEmbed2D(
@@ -707,11 +698,11 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             sigmas=sigmas,
         )
 
-        sigmas = sigmas.view(batch_size, 1, 1, 1)
-        sigmas_h = sigmas.expand(batch_size, self.config.in_channels, 1, width).float()
-        sigmas_w = sigmas.expand(batch_size, self.config.in_channels, padded_height, 1).float()
-
         with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+            sigmas = sigmas.view(batch_size, 1, 1, 1)
+            sigmas_h = sigmas.expand(batch_size, self.config.in_channels, 1, width).float()
+            sigmas_w = sigmas.expand(batch_size, self.config.in_channels, padded_height, 1).float()
+
             hidden_states = hidden_states.float() # embedder wants precision
             hidden_states = torch.addcmul(self.shift_in.view(1,-1,1,1), hidden_states, self.scale_in.view(1,-1,1,1))
             hidden_states = torch.cat([sigmas_h, hidden_states, sigmas_h], dim=2)
@@ -795,9 +786,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             hidden_states = torch.addcmul(self.shift_out, hidden_states, self.scale_out)
             hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.config.patch_size, original_height=padded_height, original_width=padded_width)
             output = hidden_states[:, :, 1:-1, 1:-1] # remove attention sinks
-
-        if flip_target: # latents - noise to noise - latents
-            output = -output
 
         if USE_PEFT_BACKEND:
             # remove `lora_scale` from each PEFT layer
