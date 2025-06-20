@@ -500,8 +500,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             num_attention_heads=self.config.num_attention_heads,
             attention_head_dim=self.config.attention_head_dim,
             heads_per_group=self.config.heads_per_group,
-            router_mult=self.config.router_mult,
-            ff_mult=self.config.ff_mult,
+            router_mult=self.config.router_mult * 2,
+            ff_mult=self.config.ff_mult * 2,
             dropout=dropout,
             is_2d=True,
         )
@@ -580,8 +580,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             num_attention_heads=self.config.num_attention_heads,
             attention_head_dim=self.config.attention_head_dim,
             heads_per_group=self.config.heads_per_group,
-            router_mult=self.config.router_mult,
-            ff_mult=self.config.ff_mult,
+            router_mult=self.config.router_mult * 2,
+            ff_mult=self.config.ff_mult * 2,
             dropout=dropout,
             is_2d=True,
         )
