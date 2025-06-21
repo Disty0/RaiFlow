@@ -641,7 +641,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 padded_width=padded_width,
                 patched_height=patched_height,
                 patched_width=patched_width,
-            ).to(dtype=dtype)
+            )
 
         for index_block, block in enumerate(self.joint_transformer_blocks):
             if use_checkpointing:

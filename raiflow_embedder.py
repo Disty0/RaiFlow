@@ -45,6 +45,7 @@ class RaiFlowLatentEmbedder(nn.Module):
     ):
         with torch.autocast(device_type=hidden_states.device.type, enabled=False):
             batch_size, _, _, width = hidden_states.shape
+            dtype = hidden_states.dtype
             hidden_states = hidden_states.float()
 
             posed_latents_2d = RaiFlowPosEmbed2D(
@@ -77,6 +78,7 @@ class RaiFlowLatentEmbedder(nn.Module):
             hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.patch_size)
             hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
             hidden_states = self.embedder(hidden_states, height=patched_height, width=patched_width)
+            hidden_states = hidden_states.to(dtype=dtype)
             return hidden_states
 
 
