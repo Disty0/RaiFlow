@@ -5,7 +5,7 @@ from torch import nn
 
 
 class DynamicTanh(nn.Module):
-    def __init__(self, dim: Union[int, torch.Size], init_alpha: float = 0.5, elementwise_affine: bool = True, bias: bool = True):
+    def __init__(self, dim: Union[int, torch.Size], init_alpha: float = 0.2, elementwise_affine: bool = True, bias: bool = True):
         super().__init__()
 
         self.alpha = nn.Parameter(torch.ones(1) * init_alpha)
@@ -19,9 +19,9 @@ class DynamicTanh(nn.Module):
         self.bias = None
 
         if elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(dim))
+            self.weight = nn.Parameter(torch.ones(self.dim))
             if bias:
-                self.bias = nn.Parameter(torch.zeros(dim))
+                self.bias = nn.Parameter(torch.zeros(self.dim))
 
     def forward(self, hidden_states):
         hidden_states = torch.tanh(torch.mul(hidden_states, self.alpha))
