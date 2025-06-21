@@ -468,7 +468,7 @@ class RaiFlowPipeline(DiffusionPipeline):
             batch_size = len(prompt)
 
         device = self._execution_device
-        dtype = self.transformer.embed_tokens.weight.dtype # pipe can be quantized
+        dtype = self.transformer.text_embedder.embed_tokens.weight.dtype # pipe can be quantized
 
         prompt_embeds = self.encode_prompt(
             prompt=prompt,

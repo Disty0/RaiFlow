@@ -4,20 +4,174 @@ import torch
 from torch import nn
 
 from diffusers.models.embeddings import get_1d_rotary_pos_embed
-
 from diffusers.utils import logging
+
+from .raiflow_feedforward import RaiFlowFeedForward, DynamicTanh
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, device: torch.device, dtype: torch.dtype, secondary_seq_len: int, base_seq_len: int, sigmas: torch.FloatTensor) -> torch.FloatTensor:
+class RaiFlowLatentEmbedder(nn.Module):
+    def __init__(self, patch_size: int, in_channels: int, base_seq_len: int, dim: int, dim_out: int, num_attention_heads: int, attention_head_dim: int, heads_per_group: int = 2, router_mult: int = 4, ff_mult: int = 4, dropout: float = 0.1):
+        super().__init__()
+
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.base_seq_len = base_seq_len
+        self.scale_in = nn.Parameter(torch.ones((1, self.in_channels, 1, 1)))
+        self.shift_in = nn.Parameter(torch.zeros((1, self.in_channels, 1, 1)))
+        self.embedder = RaiFlowFeedForward(
+            dim=dim,
+            dim_out=dim_out,
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            heads_per_group=heads_per_group,
+            router_mult=router_mult,
+            ff_mult=ff_mult,
+            dropout=dropout,
+            is_2d=True,
+        )
+
+    def forward(
+        self,
+        hidden_states: torch.FloatTensor,
+        timestep: torch.FloatTensor,
+        latents_seq_len: int,
+        encoder_seq_len: int,
+        padded_height: int,
+        padded_width: int,
+        patched_height: int,
+        patched_width: int,
+    ):
+        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+            batch_size, _, _, width = hidden_states.shape
+            hidden_states = hidden_states.float()
+
+            posed_latents_2d = RaiFlowPosEmbed2D(
+                batch_size=batch_size,
+                height=padded_height,
+                width=padded_width,
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
+
+            posed_latents_1d = RaiFlowPosEmbed1D(
+                batch_size=batch_size,
+                seq_len=latents_seq_len,
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+                secondary_seq_len=encoder_seq_len,
+                base_seq_len=self.base_seq_len,
+                timestep=timestep,
+            )
+
+            timestep = timestep.view(batch_size, 1, 1, 1).to(hidden_states.dtype)
+            timestep_h = timestep.expand(-1, self.in_channels, 1, width)
+            timestep_w = timestep.expand(-1, self.in_channels, padded_height, 1)
+
+            hidden_states = torch.addcmul(self.shift_in, hidden_states, self.scale_in)
+            hidden_states = torch.cat([timestep_h, hidden_states, timestep_h], dim=2)
+            hidden_states = torch.cat([timestep_w, hidden_states, timestep_w], dim=3)
+
+            hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
+            hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.patch_size)
+            hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
+            hidden_states = self.embedder(hidden_states, height=patched_height, width=patched_width)
+            return hidden_states
+
+
+class RaiFlowTextEmbedder(nn.Module):
+    def __init__(self, vocab_size: int, embedding_dim: int, pad_token_id: int, base_seq_len: int, dim: int, dim_out: int, num_attention_heads: int, attention_head_dim: int, heads_per_group: int = 2, router_mult: int = 4, ff_mult: int = 4, dropout: float = 0.1):
+        super().__init__()
+
+        self.embedding_dim = embedding_dim
+        self.base_seq_len = base_seq_len
+        self.embed_tokens = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
+        self.embedder = RaiFlowFeedForward(
+            dim=dim,
+            dim_out=dim_out,
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            heads_per_group=heads_per_group,
+            router_mult=router_mult,
+            ff_mult=ff_mult,
+            dropout=dropout,
+            is_2d=False,
+        )
+
+    def forward(
+        self,
+        encoder_hidden_states: torch.FloatTensor,
+        timestep: torch.FloatTensor,
+        latents_seq_len: int,
+        encoder_seq_len: int,
+    ):
+        encoder_hidden_states = self.embed_tokens(encoder_hidden_states)
+        batch_size, _, _ = encoder_hidden_states.shape
+
+        posed_encoder_1d = RaiFlowPosEmbed1D(
+            batch_size=batch_size,
+            seq_len=encoder_seq_len,
+            device=encoder_hidden_states.device,
+            dtype=encoder_hidden_states.dtype,
+            secondary_seq_len=latents_seq_len,
+            base_seq_len=self.base_seq_len,
+            timestep=timestep,
+        )
+
+        timestep = timestep.expand(batch_size, 1, self.embedding_dim)
+        encoder_hidden_states = torch.cat([timestep, encoder_hidden_states, timestep], dim=1)
+        encoder_hidden_states = torch.cat([encoder_hidden_states, posed_encoder_1d], dim=2)
+        encoder_hidden_states = self.embedder(encoder_hidden_states)
+        return encoder_hidden_states
+
+
+class RaiFlowLatentUnembedder(nn.Module):
+    def __init__(self, patch_size: int, dim: int, dim_out: int, num_attention_heads: int, attention_head_dim: int, heads_per_group: int = 2, router_mult: int = 4, ff_mult: int = 4, dropout: float = 0.1):
+        super().__init__()
+
+        self.patch_size = patch_size
+        self.norm_unembed = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.unembedder = RaiFlowFeedForward(
+            dim=dim,
+            dim_out=dim_out,
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            heads_per_group=heads_per_group,
+            router_mult=router_mult,
+            ff_mult=ff_mult,
+            dropout=dropout,
+            is_2d=True,
+        )
+        self.scale_out = nn.Parameter(torch.ones(dim_out))
+        self.shift_out = nn.Parameter(torch.zeros(dim_out))
+
+    def forward(
+        self,
+        hidden_states: torch.FloatTensor,
+        padded_height: int,
+        padded_width: int,
+        patched_height: int,
+        patched_width: int,
+    ):
+        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+            hidden_states = hidden_states.float()
+            hidden_states = self.norm_unembed(hidden_states)
+            hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
+            hidden_states = torch.addcmul(self.shift_out, hidden_states, self.scale_out)
+            hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.patch_size, original_height=padded_height, original_width=padded_width)
+            hidden_states = hidden_states[:, :, 1:-1, 1:-1] # remove attention sinks
+            return hidden_states
+
+
+def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, device: torch.device, dtype: torch.dtype, secondary_seq_len: int, base_seq_len: int, timestep: torch.FloatTensor) -> torch.FloatTensor:
     ones = torch.ones((batch_size, seq_len, 1), device=device, dtype=dtype)
 
     # Create 1D linspace tensors on the target device
     posed_embeds_ch0 = torch.linspace(start=0, end=1, steps=seq_len, device=device, dtype=dtype)
     posed_embeds_ch1 = torch.linspace(start=0, end=1, steps=(seq_len + secondary_seq_len), device=device, dtype=dtype)[:seq_len]
     posed_embeds_ch2 = ones * (seq_len / base_seq_len)
-    posed_embeds_ch3 = ones * sigmas
+    posed_embeds_ch3 = ones * timestep
 
     # stack and repeat for batch_size
     posed_embeds = torch.stack([posed_embeds_ch0, posed_embeds_ch1], dim=1)
