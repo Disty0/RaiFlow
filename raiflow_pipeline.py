@@ -469,6 +469,7 @@ class RaiFlowPipeline(DiffusionPipeline):
 
         device = self._execution_device
         dtype = self.transformer.text_embedder.embed_tokens.weight.dtype # pipe can be quantized
+        latents_dtype = torch.float32 # DCT space needs high precision
 
         prompt_embeds = self.encode_prompt(
             prompt=prompt,
@@ -487,7 +488,7 @@ class RaiFlowPipeline(DiffusionPipeline):
             num_channels_latents,
             height,
             width,
-            dtype,
+            latents_dtype,
             device,
             generator,
             latents,
@@ -561,7 +562,6 @@ class RaiFlowPipeline(DiffusionPipeline):
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
                 )
-                noise_pred = noise_pred.float()
 
                 # perform guidances
                 if self.do_classifier_free_guidance:
@@ -593,9 +593,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                     """
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t.float(), latents.float(), return_dict=False)[0]
-                latents = latents.to(dtype)
-                noise_pred = noise_pred.to(dtype) # for callback
+                latents = self.scheduler.step(noise_pred, t.to(dtype=latents_dtype), latents, return_dict=False)[0]
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}

@@ -586,9 +586,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     "Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective."
                 )
 
+        dtype = self.text_embedder.embed_tokens.weight.dtype # pipe can be quantized
         use_checkpointing = torch.is_grad_enabled() and self.gradient_checkpointing
         device = hidden_states.device
-        dtype = hidden_states.dtype
 
         batch_size, channels, height, width = hidden_states.shape
         _, encoder_seq_len = encoder_hidden_states.shape
