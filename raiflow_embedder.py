@@ -36,6 +36,7 @@ class RaiFlowLatentEmbedder(nn.Module):
         self,
         hidden_states: torch.FloatTensor,
         timestep: torch.FloatTensor,
+        dtype: torch.dtype,
         latents_seq_len: int,
         encoder_seq_len: int,
         padded_height: int,
@@ -45,7 +46,6 @@ class RaiFlowLatentEmbedder(nn.Module):
     ):
         with torch.autocast(device_type=hidden_states.device.type, enabled=False):
             batch_size, _, _, width = hidden_states.shape
-            dtype = hidden_states.dtype
             hidden_states = hidden_states.float()
 
             posed_latents_2d = RaiFlowPosEmbed2D(
@@ -66,7 +66,7 @@ class RaiFlowLatentEmbedder(nn.Module):
                 timestep=timestep,
             )
 
-            timestep = timestep.view(batch_size, 1, 1, 1).to(hidden_states.dtype)
+            timestep = timestep.view(batch_size, 1, 1, 1).to(dtype=hidden_states.dtype)
             timestep_h = timestep.expand(-1, self.in_channels, 1, width)
             timestep_w = timestep.expand(-1, self.in_channels, padded_height, 1)
 
@@ -236,13 +236,13 @@ def prepare_latent_image_ids(height, width, device, dtype):
     latent_image_ids[..., 1] = torch.arange(height).unsqueeze(-1)
     latent_image_ids[..., 2] = torch.arange(width).unsqueeze(0)
     latent_image_ids = latent_image_ids.reshape(height * width, 3)
-    return latent_image_ids.to(device=device, dtype=dtype)
+    return latent_image_ids.to(device, dtype=dtype)
 
 
 def prepare_text_embed_ids(seq_len, device, dtype):
     text_embed_ids = torch.zeros(seq_len, 3)
     text_embed_ids[..., 0] = torch.arange(seq_len)
-    return text_embed_ids.to(device=device, dtype=dtype)
+    return text_embed_ids.to(device, dtype=dtype)
 
 
 class FluxPosEmbed(nn.Module):
