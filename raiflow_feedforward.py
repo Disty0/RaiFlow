@@ -43,27 +43,27 @@ class RaiFlowFeedForward(nn.Module):
 
         self.router = nn.Sequential(
             nn.Linear(dim, self.inner_dim, bias=True),
-            DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True),
+            nn.GELU(approximate="tanh"),
             nn.Dropout(dropout),
         )
 
         if self.is_2d:
             self.conv = nn.Sequential(
                 nn.Conv2d(self.inner_dim, self.ff_dim, 3, padding=1, groups=self.num_groups),
-                DynamicTanh(dim=(1, self.ff_dim, 1, 1), init_alpha=0.2, elementwise_affine=True, bias=True),
+                nn.GELU(approximate="tanh"),
                 nn.Dropout(dropout),
                 nn.Conv2d(self.ff_dim, self.inner_dim, 3, padding=1, groups=self.num_groups),
             )
         else:
             self.conv = nn.Sequential(
                 nn.Conv1d(self.inner_dim, self.ff_dim, 3, padding=1, groups=self.num_groups),
-                DynamicTanh(dim=(1, self.ff_dim, 1), init_alpha=0.2, elementwise_affine=True, bias=True),
+                nn.GELU(approximate="tanh"),
                 nn.Dropout(dropout),
                 nn.Conv1d(self.ff_dim, self.inner_dim, 3, padding=1, groups=self.num_groups),
             )
 
         self.proj_out = nn.Sequential(
-            DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True),
+            nn.GELU(approximate="tanh"),
             nn.Dropout(dropout),
             nn.Linear(self.inner_dim, dim_out, bias=True),
         )
