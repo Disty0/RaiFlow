@@ -496,13 +496,9 @@ class RaiFlowPipeline(DiffusionPipeline):
 
         _, _, latent_height, latent_width = latents.shape
         _, encoder_seq_len = prompt_embeds.shape
-        encoder_seq_len = encoder_seq_len + 2
 
-        padded_height = latent_height + 2
-        padded_width = latent_width + 2
-
-        patched_height = padded_height // self.patch_size
-        patched_width = padded_width // self.patch_size
+        patched_height = latent_height // self.patch_size
+        patched_width = latent_width // self.patch_size
         latents_seq_len = patched_height * patched_width
 
         # 5. Prepare timesteps
