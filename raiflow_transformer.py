@@ -12,7 +12,7 @@ from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscal
 from diffusers.models.attention_processor import Attention
 from diffusers.models.modeling_utils import ModelMixin
 
-from .raiflow_feedforward import RaiFlowFeedForward, DynamicTanh
+from .raiflow_layers import RaiFlowFeedForward, DynamicTanh
 from .raiflow_atten import RaiFlowAttnProcessor2_0, RaiFlowCrossAttnProcessor2_0
 from .raiflow_embedder import RaiFlowLatentEmbedder, RaiFlowTextEmbedder, RaiFlowLatentUnembedder, prepare_latent_image_ids, prepare_text_embed_ids, FluxPosEmbed
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput

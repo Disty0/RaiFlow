@@ -6,7 +6,7 @@ from torch import nn
 from diffusers.models.embeddings import get_1d_rotary_pos_embed
 from diffusers.utils import logging
 
-from .raiflow_feedforward import RaiFlowFeedForward, DynamicTanh
+from .raiflow_layers import RaiFlowFeedForward, DynamicTanh
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
