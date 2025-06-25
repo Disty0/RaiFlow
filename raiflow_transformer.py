@@ -616,6 +616,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 self.text_embedder,
                 encoder_hidden_states,
                 timestep,
+                dtype,
                 latents_seq_len,
                 encoder_seq_len,
                 batch_size,
@@ -624,6 +625,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             encoder_hidden_states = self.text_embedder(
                 encoder_hidden_states=encoder_hidden_states,
                 timestep=timestep,
+                dtype=dtype,
                 latents_seq_len=latents_seq_len,
                 encoder_seq_len=encoder_seq_len,
                 batch_size=batch_size,

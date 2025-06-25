@@ -61,7 +61,7 @@ class RaiFlowLatentEmbedder(nn.Module):
                     dtype=torch.float32,
                     secondary_seq_len=encoder_seq_len,
                     base_seq_len=self.base_seq_len,
-                    timestep=timestep,
+                    timestep=timestep.float(),
                 )
 
             hidden_states = hidden_states.float()
@@ -97,6 +97,7 @@ class RaiFlowTextEmbedder(nn.Module):
         self,
         encoder_hidden_states: torch.FloatTensor,
         timestep: torch.FloatTensor,
+        dtype: torch.dtype,
         latents_seq_len: int,
         encoder_seq_len: int,
         batch_size: int,
@@ -106,7 +107,7 @@ class RaiFlowTextEmbedder(nn.Module):
                 batch_size=batch_size,
                 seq_len=encoder_seq_len,
                 device=encoder_hidden_states.device,
-                dtype=encoder_hidden_states.dtype,
+                dtype=dtype,
                 secondary_seq_len=latents_seq_len,
                 base_seq_len=self.base_seq_len,
                 timestep=timestep,
