@@ -615,9 +615,20 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             text_rotary_emb = (combined_rotary_emb[0][: encoder_seq_len], combined_rotary_emb[1][: encoder_seq_len])
 
         if use_checkpointing:
-            encoder_hidden_states = self._gradient_checkpointing_func(self.text_embedder, encoder_hidden_states, timestep, latents_seq_len, encoder_seq_len)
+            encoder_hidden_states = self._gradient_checkpointing_func(
+                self.text_embedder,
+                encoder_hidden_states,
+                timestep,
+                latents_seq_len,
+                encoder_seq_len
+            )
         else:
-            encoder_hidden_states = self.text_embedder(encoder_hidden_states=encoder_hidden_states, timestep=timestep, latents_seq_len=latents_seq_len, encoder_seq_len=encoder_seq_len)
+            encoder_hidden_states = self.text_embedder(
+                encoder_hidden_states=encoder_hidden_states,
+                timestep=timestep,
+                latents_seq_len=latents_seq_len,
+                encoder_seq_len=encoder_seq_len
+            )
 
         if use_checkpointing:
             hidden_states = self._gradient_checkpointing_func(
@@ -668,7 +679,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     width=patched_width,
                 )
 
-        self.norm_context(encoder_hidden_states)
+        encoder_hidden_states = self.norm_context(encoder_hidden_states)
 
         for index_block, block in enumerate(self.cond_transformer_blocks):
             if use_checkpointing:

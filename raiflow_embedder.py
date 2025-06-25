@@ -83,7 +83,7 @@ class RaiFlowLatentEmbedder(nn.Module):
 
 
 class RaiFlowTextEmbedder(nn.Module):
-    def __init__(self, vocab_size: int, embedding_dim: int, pad_token_id: int, base_seq_len: int, dim: int, dim_out: int, num_attention_heads: int, attention_head_dim: int, heads_per_group: int = 2, router_mult: int = 4, ff_mult: int = 4, dropout: float = 0.1):
+    def __init__(self, vocab_size: int, embedding_dim: int, pad_token_id: int, base_seq_len: int, dim: int, dim_out: int, num_attention_heads: int, attention_head_dim: int, heads_per_group: int = 2, router_mult: int = 2, ff_mult: int = 2, dropout: float = 0.1):
         super().__init__()
 
         self.embedding_dim = embedding_dim
