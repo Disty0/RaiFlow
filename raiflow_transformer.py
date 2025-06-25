@@ -597,9 +597,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         patched_width = width // self.config.patch_size
         latents_seq_len = patched_height * patched_width
 
-        timestep = timestep.view(batch_size, 1, 1)
-
         with torch.no_grad():
+            timestep = timestep.view(batch_size, 1, 1)
+
             if combined_rotary_emb is None:
                 txt_ids = prepare_text_embed_ids(encoder_seq_len, device, dtype)
                 img_ids = prepare_latent_image_ids(patched_height, patched_width, device, dtype)
