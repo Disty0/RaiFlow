@@ -14,7 +14,7 @@ from diffusers.models.modeling_utils import ModelMixin
 
 from .raiflow_layers import RaiFlowFeedForward, DynamicTanh
 from .raiflow_atten import RaiFlowAttnProcessor2_0, RaiFlowCrossAttnProcessor2_0
-from .raiflow_embedder import RaiFlowLatentEmbedder, RaiFlowTextEmbedder, RaiFlowLatentUnembedder, prepare_latent_image_ids, prepare_text_embed_ids, FluxPosEmbed
+from .raiflow_embedder import RaiFlowLatentEmbedder, RaiFlowTextEmbedder, RaiFlowLatentUnembedder
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -94,11 +94,10 @@ class RaiFlowSingleTransformerBlock(nn.Module):
     def forward(
         self,
         hidden_states: torch.FloatTensor,
-        rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
     ) -> torch.FloatTensor:
-        hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None, rotary_emb=rotary_emb)
+        hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None)
         hidden_states = hidden_states + self.ff(self.norm_ff(hidden_states), height=height, width=width)
         return hidden_states
 
@@ -194,18 +193,15 @@ class RaiFlowJointTransformerBlock(nn.Module):
         self,
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: torch.FloatTensor,
-        combined_rotary_emb: Tuple[torch.FloatTensor],
-        image_rotary_emb: Tuple[torch.FloatTensor],
-        text_rotary_emb: Tuple[torch.FloatTensor],
         height: Optional[int] = None,
         width: Optional[int] = None,
     ) -> torch.FloatTensor:
-        attn_output, context_attn_output = self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=self.norm_attn_context(encoder_hidden_states), rotary_emb=combined_rotary_emb)
+        attn_output, context_attn_output = self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=self.norm_attn_context(encoder_hidden_states))
         hidden_states = hidden_states + attn_output
         encoder_hidden_states = encoder_hidden_states + context_attn_output
 
-        hidden_states = self.latent_transformer(hidden_states, rotary_emb=image_rotary_emb, height=height, width=width)
-        encoder_hidden_states = self.encoder_transformer(encoder_hidden_states, rotary_emb=text_rotary_emb)
+        hidden_states = self.latent_transformer(hidden_states, height=height, width=width)
+        encoder_hidden_states = self.encoder_transformer(encoder_hidden_states)
         return hidden_states, encoder_hidden_states
 
 
@@ -305,12 +301,11 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         self,
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: torch.FloatTensor,
-        image_rotary_emb: Tuple[torch.FloatTensor],
         height: Optional[int] = None,
         width: Optional[int] = None,
     ) -> torch.FloatTensor:
         hidden_states = hidden_states + self.cross_attn(hidden_states=self.norm_cross_attn(hidden_states), encoder_hidden_states=encoder_hidden_states)
-        hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None, rotary_emb=image_rotary_emb)
+        hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None)
         hidden_states = hidden_states + self.ff( self.norm_ff(hidden_states), height=height, width=width)
         return hidden_states
 
@@ -340,9 +335,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         ff_mult (`int`, *optional*, defaults to 2): The multiplier to use for the conv feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
         qk_norm (`str`, *optional*, defaults to "dynamic_tanh"): The qk normalization to use in attention.
-        axes_dims_rope (Tuple[int], *optional*, defaults to (16, 24, 24)): The dimensions for rotart positional embeds.
-            First dimension defines how much of the attention_head_dim won't be used for positional embeds.
-            Rest of them are used with positional embeds. Mainly for the height and the width of the latents.
         eps (`float`, *optional*, defaults to 1e-05): The eps used with nn modules.
     """
 
@@ -372,7 +364,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         ff_mult: int = 2,
         dropout: float = 0.1,
         qk_norm: str = "dynamic_tanh",
-        axes_dims_rope = (16, 24, 24),
         eps: float = 1e-05,
     ):
         super().__init__()
@@ -384,8 +375,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.base_seq_len = (self.config.sample_size // self.config.patch_size) * (self.config.sample_size // self.config.patch_size)
         self.patched_in_channels = 4 + ((self.config.in_channels + 4) * self.config.patch_size*self.config.patch_size) # patched + pos channels
         self.encoder_in_channels = 4 + self.embedding_dim # pos channels
-
-        self.pos_embed = FluxPosEmbed(theta=10000, axes_dim=self.config.axes_dims_rope)
 
         self.embedder = RaiFlowLatentEmbedder(
             patch_size=self.config.patch_size,
@@ -489,9 +478,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: torch.Tensor,
         timestep: torch.FloatTensor,
-        combined_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
-        image_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
-        text_rotary_emb: Optional[Tuple[torch.FloatTensor]] = None,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
     ) -> Union[RaiFlowTransformer2DModelOutput, Tuple[torch.FloatTensor]]:
@@ -505,10 +491,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 Input IDs from the tokenizer to use.
             timestep (`torch.LongTensor`):
                 Used to indicate the current denoising step.
-            combined_rotary_emb (Tuple[`torch.FloatTensor`] of shape `(combined_sequence_len, 3)`, *optional*):
-                Used for rotary positional embeddings. combined_sequence_len is encoder_seq_len + latents_seq_len.
-            image_rotary_emb (Tuple[`torch.FloatTensor`] of shape `(latents_seq_len, 3)`, *optional*):
-                Used for rotary positional embeddings for the latents.
             joint_attention_kwargs (`dict`, *optional*):
                 A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
                 `self.processor` in
@@ -538,7 +520,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         dtype = self.text_embedder.embed_tokens.weight.dtype # pipe can be quantized
         use_checkpointing = torch.is_grad_enabled() and self.gradient_checkpointing
-        device = hidden_states.device
 
         batch_size, channels, height, width = hidden_states.shape
         _, encoder_seq_len = encoder_hidden_states.shape
@@ -549,17 +530,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         with torch.no_grad():
             timestep = timestep.view(batch_size, 1, 1)
-
-            if combined_rotary_emb is None:
-                txt_ids = prepare_text_embed_ids(encoder_seq_len, device, dtype)
-                img_ids = prepare_latent_image_ids(patched_height, patched_width, device, dtype)
-                combined_ids = torch.cat((txt_ids, img_ids), dim=0)
-                combined_rotary_emb = self.pos_embed(combined_ids, freqs_dtype=torch.float32)
-
-            if image_rotary_emb is None:
-                image_rotary_emb = (combined_rotary_emb[0][encoder_seq_len :], combined_rotary_emb[1][encoder_seq_len :])
-            if text_rotary_emb is None:
-                text_rotary_emb = (combined_rotary_emb[0][: encoder_seq_len], combined_rotary_emb[1][: encoder_seq_len])
 
         if use_checkpointing:
             encoder_hidden_states = self._gradient_checkpointing_func(
@@ -615,9 +585,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     block,
                     hidden_states,
                     encoder_hidden_states,
-                    combined_rotary_emb,
-                    image_rotary_emb,
-                    text_rotary_emb,
                     patched_height,
                     patched_width,
                 )
@@ -625,9 +592,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 hidden_states, encoder_hidden_states = block(
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
-                    combined_rotary_emb=combined_rotary_emb,
-                    image_rotary_emb=image_rotary_emb,
-                    text_rotary_emb=text_rotary_emb,
                     height=patched_height,
                     width=patched_width,
                 )
@@ -640,7 +604,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     block,
                     hidden_states,
                     encoder_hidden_states,
-                    image_rotary_emb,
                     patched_height,
                     patched_width,
                 )
@@ -648,7 +611,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 hidden_states = block(
                     hidden_states=hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
-                    image_rotary_emb=image_rotary_emb,
                     height=patched_height,
                     width=patched_width,
                 )
@@ -658,14 +620,12 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 hidden_states = self._gradient_checkpointing_func(
                     block,
                     hidden_states,
-                    image_rotary_emb,
                     patched_height,
                     patched_width,
                 )
             else:
                 hidden_states = block(
                     hidden_states=hidden_states,
-                    rotary_emb=image_rotary_emb,
                     height=patched_height,
                     width=patched_width,
                 )
