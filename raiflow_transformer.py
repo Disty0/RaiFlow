@@ -339,7 +339,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     """
 
     _supports_gradient_checkpointing = True
-    _keep_in_fp32_modules = ["embedder", "unembedder", "scale_in", "shift_in", "scale_out", "shift_out", "norm_unembed"]
+    _keep_in_fp32_modules = ["embedder", "unembedder", "norm_unembed"]
 
     @register_to_config
     def __init__(
