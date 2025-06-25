@@ -592,27 +592,24 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         batch_size, channels, height, width = hidden_states.shape
         _, encoder_seq_len = encoder_hidden_states.shape
-        encoder_seq_len = encoder_seq_len + 2
 
-        padded_height = height + 2
-        padded_width = width + 2
-
-        patched_height = padded_height // self.config.patch_size
-        patched_width = padded_width // self.config.patch_size
+        patched_height = height // self.config.patch_size
+        patched_width = width // self.config.patch_size
         latents_seq_len = patched_height * patched_width
 
         timestep = timestep.view(batch_size, 1, 1)
 
-        if combined_rotary_emb is None:
-            txt_ids = prepare_text_embed_ids(encoder_seq_len, device, dtype)
-            img_ids = prepare_latent_image_ids(patched_height, patched_width, device, dtype)
-            combined_ids = torch.cat((txt_ids, img_ids), dim=0)
-            combined_rotary_emb = self.pos_embed(combined_ids, freqs_dtype=torch.float32)
+        with torch.no_grad():
+            if combined_rotary_emb is None:
+                txt_ids = prepare_text_embed_ids(encoder_seq_len, device, dtype)
+                img_ids = prepare_latent_image_ids(patched_height, patched_width, device, dtype)
+                combined_ids = torch.cat((txt_ids, img_ids), dim=0)
+                combined_rotary_emb = self.pos_embed(combined_ids, freqs_dtype=torch.float32)
 
-        if image_rotary_emb is None:
-            image_rotary_emb = (combined_rotary_emb[0][encoder_seq_len :], combined_rotary_emb[1][encoder_seq_len :])
-        if text_rotary_emb is None:
-            text_rotary_emb = (combined_rotary_emb[0][: encoder_seq_len], combined_rotary_emb[1][: encoder_seq_len])
+            if image_rotary_emb is None:
+                image_rotary_emb = (combined_rotary_emb[0][encoder_seq_len :], combined_rotary_emb[1][encoder_seq_len :])
+            if text_rotary_emb is None:
+                text_rotary_emb = (combined_rotary_emb[0][: encoder_seq_len], combined_rotary_emb[1][: encoder_seq_len])
 
         if use_checkpointing:
             encoder_hidden_states = self._gradient_checkpointing_func(
@@ -620,14 +617,16 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 encoder_hidden_states,
                 timestep,
                 latents_seq_len,
-                encoder_seq_len
+                encoder_seq_len,
+                batch_size,
             )
         else:
             encoder_hidden_states = self.text_embedder(
                 encoder_hidden_states=encoder_hidden_states,
                 timestep=timestep,
                 latents_seq_len=latents_seq_len,
-                encoder_seq_len=encoder_seq_len
+                encoder_seq_len=encoder_seq_len,
+                batch_size=batch_size,
             )
 
         if use_checkpointing:
@@ -638,8 +637,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 dtype,
                 latents_seq_len,
                 encoder_seq_len,
-                padded_height,
-                padded_width,
+                batch_size,
+                height,
+                width,
                 patched_height,
                 patched_width,
             )
@@ -650,8 +650,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 dtype=dtype,
                 latents_seq_len=latents_seq_len,
                 encoder_seq_len=encoder_seq_len,
-                padded_height=padded_height,
-                padded_width=padded_width,
+                batch_size=batch_size,
+                height=height,
+                width=width,
                 patched_height=patched_height,
                 patched_width=patched_width,
             )
@@ -718,9 +719,22 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 )
 
         if use_checkpointing:
-            output = self._gradient_checkpointing_func(self.unembedder, hidden_states, padded_height, padded_width, patched_height, patched_width)
+            output = self._gradient_checkpointing_func(
+                self.unembedder,
+                hidden_states,
+                height,
+                width,
+                patched_height,
+                patched_width
+            )
         else:
-            output = self.unembedder(hidden_states, padded_height=padded_height, padded_width=padded_width, patched_height=patched_height, patched_width=patched_width)
+            output = self.unembedder(
+                hidden_states,
+                height=height,
+                width=width,
+                patched_height=patched_height,
+                patched_width=patched_width
+            )
 
         if USE_PEFT_BACKEND:
             # remove `lora_scale` from each PEFT layer

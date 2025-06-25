@@ -19,17 +19,18 @@ class DynamicTanh(nn.Module):
         self.bias = None
 
         if elementwise_affine:
-            self.weight = nn.Parameter(torch.ones(self.dim))
-            if bias:
-                self.bias = nn.Parameter(torch.zeros(self.dim))
+            self.weight = nn.Parameter((torch.ones(self.dim) / init_alpha) * (torch.pi / 2))
+        else:
+            self.weight = nn.Parameter((torch.ones(1) / init_alpha) * (torch.pi / 2))
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(self.dim))
 
     def forward(self, hidden_states):
         hidden_states = torch.tanh(torch.mul(hidden_states, self.alpha))
-        if self.weight is not None:
-            if self.bias is not None:
-                hidden_states = torch.addcmul(self.bias, hidden_states, self.weight)
-            else:
-                hidden_states = torch.mul(hidden_states, self.weight)
+        if self.bias is not None:
+            hidden_states = torch.addcmul(self.bias, hidden_states, self.weight)
+        else:
+            hidden_states = torch.mul(hidden_states, self.weight)
         return hidden_states
 
 
@@ -43,27 +44,27 @@ class RaiFlowFeedForward(nn.Module):
 
         self.router = nn.Sequential(
             nn.Linear(dim, self.inner_dim, bias=True),
-            nn.GELU(approximate="tanh"),
+            nn.GELU(approximate="none"),
             nn.Dropout(dropout),
         )
 
         if self.is_2d:
             self.conv = nn.Sequential(
                 nn.Conv2d(self.inner_dim, self.ff_dim, 3, padding=1, groups=self.num_groups),
-                nn.GELU(approximate="tanh"),
+                nn.GELU(approximate="none"),
                 nn.Dropout(dropout),
                 nn.Conv2d(self.ff_dim, self.inner_dim, 3, padding=1, groups=self.num_groups),
             )
         else:
             self.conv = nn.Sequential(
                 nn.Conv1d(self.inner_dim, self.ff_dim, 3, padding=1, groups=self.num_groups),
-                nn.GELU(approximate="tanh"),
+                nn.GELU(approximate="none"),
                 nn.Dropout(dropout),
                 nn.Conv1d(self.ff_dim, self.inner_dim, 3, padding=1, groups=self.num_groups),
             )
 
         self.proj_out = nn.Sequential(
-            nn.GELU(approximate="tanh"),
+            nn.GELU(approximate="none"),
             nn.Dropout(dropout),
             nn.Linear(self.inner_dim, dim_out, bias=True),
         )
