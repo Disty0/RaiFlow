@@ -56,10 +56,10 @@ class RaiFlowLatentEmbedder(nn.Module):
                     dtype=torch.float32,
                     secondary_seq_len=encoder_seq_len,
                     base_seq_len=self.base_seq_len,
-                    timestep=timestep.float(),
+                    timestep=timestep.to(dtype=torch.float32),
                 )
 
-            hidden_states = hidden_states.float()
+            hidden_states = hidden_states.to(dtype=torch.float32)
             hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
             hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.patch_size)
             hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
@@ -140,7 +140,7 @@ class RaiFlowLatentUnembedder(nn.Module):
         patched_width: int,
     ):
         with torch.autocast(device_type=hidden_states.device.type, enabled=False):
-            hidden_states = hidden_states.float()
+            hidden_states = hidden_states.to(dtype=torch.float32)
             hidden_states = self.norm_unembed(hidden_states)
             hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
             hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.patch_size, original_height=height, original_width=width)
