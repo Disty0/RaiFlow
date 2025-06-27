@@ -98,7 +98,7 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         width: Optional[int] = None,
     ) -> torch.FloatTensor:
         hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None)
-        hidden_states = hidden_states + self.ff(self.norm_ff(hidden_states), height=height, width=width)
+        hidden_states = hidden_states + self.ff(hidden_states=self.norm_ff(hidden_states), height=height, width=width)
         return hidden_states
 
 
@@ -200,8 +200,8 @@ class RaiFlowJointTransformerBlock(nn.Module):
         hidden_states = hidden_states + attn_output
         encoder_hidden_states = encoder_hidden_states + context_attn_output
 
-        hidden_states = self.latent_transformer(hidden_states, height=height, width=width)
-        encoder_hidden_states = self.encoder_transformer(encoder_hidden_states)
+        hidden_states = self.latent_transformer(hidden_states=hidden_states, height=height, width=width)
+        encoder_hidden_states = self.encoder_transformer(hidden_states=encoder_hidden_states)
         return hidden_states, encoder_hidden_states
 
 
@@ -306,7 +306,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
     ) -> torch.FloatTensor:
         hidden_states = hidden_states + self.cross_attn(hidden_states=self.norm_cross_attn(hidden_states), encoder_hidden_states=encoder_hidden_states)
         hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None)
-        hidden_states = hidden_states + self.ff( self.norm_ff(hidden_states), height=height, width=width)
+        hidden_states = hidden_states + self.ff(hidden_states=self.norm_ff(hidden_states), height=height, width=width)
         return hidden_states
 
 

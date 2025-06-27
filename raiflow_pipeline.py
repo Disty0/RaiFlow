@@ -39,8 +39,7 @@ EXAMPLE_DOC_STRING = """
 
         >>> pipe = RaiFlowPipeline.from_pretrained(
         ...     "Disty0/RaiFlow", torch_dtype=torch.float16
-        ... )
-        >>> pipe.to("cuda")
+        ... ).to("cuda")
         >>> prompt = "A cat holding a sign that says hello world"
         >>> image = pipe(prompt).images[0]
         >>> image.save("raiflow.png")
@@ -300,7 +299,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype).to(device, dtype=dtype) # xpu returns float32
+        latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype).to(device, dtype=dtype) # xpu always returns float32
 
         return latents
 
