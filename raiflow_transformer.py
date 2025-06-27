@@ -339,7 +339,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     """
 
     _supports_gradient_checkpointing = True
-    _keep_in_fp32_modules = ["embedder", "unembedder", "norm_unembed"]
+    _keep_in_fp32_modules = ["latent_embedder", "unembedder", "norm_unembed"]
 
     @register_to_config
     def __init__(
@@ -376,7 +376,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.patched_in_channels = 4 + ((self.config.in_channels + 4) * self.config.patch_size*self.config.patch_size) # patched + pos channels
         self.encoder_in_channels = 4 + self.embedding_dim # pos channels
 
-        self.embedder = RaiFlowLatentEmbedder(
+        self.latent_embedder = RaiFlowLatentEmbedder(
             patch_size=self.config.patch_size,
             in_channels=self.config.in_channels,
             base_seq_len=self.base_seq_len,
@@ -553,7 +553,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         if use_checkpointing:
             hidden_states = self._gradient_checkpointing_func(
-                self.embedder,
+                self.latent_embedder,
                 hidden_states,
                 timestep,
                 dtype,
@@ -566,7 +566,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 patched_width,
             )
         else:
-            hidden_states = self.embedder(
+            hidden_states = self.latent_embedder(
                 hidden_states=hidden_states,
                 timestep=timestep,
                 dtype=dtype,

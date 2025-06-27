@@ -15,7 +15,7 @@ class RaiFlowLatentEmbedder(nn.Module):
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.base_seq_len = base_seq_len
-        self.embedder = RaiFlowFeedForward(
+        self.latent_embedder = RaiFlowFeedForward(
             dim=dim,
             dim_out=dim_out,
             num_attention_heads=num_attention_heads,
@@ -63,7 +63,7 @@ class RaiFlowLatentEmbedder(nn.Module):
             hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
             hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.patch_size)
             hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
-            hidden_states = self.embedder(hidden_states, height=patched_height, width=patched_width)
+            hidden_states = self.latent_embedder(hidden_states, height=patched_height, width=patched_width)
             hidden_states = hidden_states.to(dtype=dtype)
             return hidden_states
 
@@ -75,7 +75,7 @@ class RaiFlowTextEmbedder(nn.Module):
         self.embedding_dim = embedding_dim
         self.base_seq_len = base_seq_len
         self.embed_tokens = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
-        self.embedder = RaiFlowFeedForward(
+        self.text_embedder = RaiFlowFeedForward(
             dim=dim,
             dim_out=dim_out,
             num_attention_heads=num_attention_heads,
@@ -109,7 +109,7 @@ class RaiFlowTextEmbedder(nn.Module):
 
         encoder_hidden_states = self.embed_tokens(encoder_hidden_states)
         encoder_hidden_states = torch.cat([encoder_hidden_states, posed_encoder_1d], dim=2)
-        encoder_hidden_states = self.embedder(encoder_hidden_states)
+        encoder_hidden_states = self.text_embedder(encoder_hidden_states)
         return encoder_hidden_states
 
 
