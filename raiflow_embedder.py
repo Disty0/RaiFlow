@@ -15,6 +15,8 @@ class RaiFlowLatentEmbedder(nn.Module):
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.base_seq_len = base_seq_len
+        self.scale_latent = nn.Parameter(torch.ones((1, self.in_channels, 1, 1)))
+        self.shift_latent = nn.Parameter(torch.zeros((1, self.in_channels, 1, 1)))
         self.latent_embedder = RaiFlowFeedForward(
             dim=dim,
             dim_out=dim_out,
@@ -60,6 +62,7 @@ class RaiFlowLatentEmbedder(nn.Module):
                 )
 
             hidden_states = hidden_states.to(dtype=torch.float32)
+            hidden_states = torch.addcmul(self.shift_latent, hidden_states, self.scale_latent)
             hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
             hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.patch_size)
             hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
