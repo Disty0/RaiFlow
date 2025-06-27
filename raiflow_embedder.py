@@ -121,6 +121,8 @@ class RaiFlowLatentUnembedder(nn.Module):
         super().__init__()
 
         self.patch_size = patch_size
+        self.scale_latent_out = nn.Parameter(torch.ones(dim_out))
+        self.shift_latent_out = nn.Parameter(torch.zeros(dim_out))
         self.norm_unembed = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
         self.unembedder = RaiFlowFeedForward(
             dim=dim,
@@ -146,6 +148,7 @@ class RaiFlowLatentUnembedder(nn.Module):
             hidden_states = hidden_states.to(dtype=torch.float32)
             hidden_states = self.norm_unembed(hidden_states)
             hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
+            hidden_states = torch.addcmul(self.shift_latent_out, hidden_states, self.scale_latent_out)
             hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.patch_size, original_height=height, original_width=width)
             return hidden_states
 
