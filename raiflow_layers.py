@@ -19,9 +19,9 @@ class DynamicTanh(nn.Module):
         self.bias = None
 
         if elementwise_affine:
-            self.weight = nn.Parameter((torch.ones(self.dim) / init_alpha) * (torch.pi / 2))
+            self.weight = nn.Parameter(torch.ones(self.dim) / init_alpha)
         else:
-            self.weight = nn.Parameter((torch.ones(1) / init_alpha) * (torch.pi / 2))
+            self.weight = nn.Parameter(torch.ones(1) / init_alpha)
         if bias:
             self.bias = nn.Parameter(torch.zeros(self.dim))
 
