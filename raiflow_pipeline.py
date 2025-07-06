@@ -590,8 +590,6 @@ class RaiFlowPipeline(DiffusionPipeline):
         if output_type == "latent":
             image = latents
         else:
-            if latents.device.type in {"xpu", "mps"}:
-                latents = latents.to("cpu")
             image = self.image_encoder.decode(latents, return_type=output_type)
 
         if not return_dict:
