@@ -339,7 +339,12 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     """
 
     _supports_gradient_checkpointing = True
-    _keep_in_fp32_modules = ["latent_embedder", "unembedder", "norm_unembed", "scale_latent", "shift_latent", "scale_latent_out", "shift_latent_out"]
+    _skip_layerwise_casting_patterns = [
+        "text_embedder", "embed_tokens", "latent_embedder", "unembedder", "norm_unembed",
+        "scale_latent", "shift_latent", "scale_latent_out", "shift_latent_out",
+        "norm_ff", "norm_attn", "norm_attn_context", "norm_cross_attn",
+        "norm_q", "norm_k", "norm_added_q", "norm_added_k", "bias",
+    ]
 
     @register_to_config
     def __init__(

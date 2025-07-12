@@ -42,33 +42,31 @@ class RaiFlowLatentEmbedder(nn.Module):
         patched_height: int,
         patched_width: int,
     ):
-        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
-            with torch.no_grad():
-                posed_latents_2d = RaiFlowPosEmbed2D(
-                    batch_size=batch_size,
-                    height=height,
-                    width=width,
-                    device=hidden_states.device,
-                    dtype=torch.float32,
-                )
-                posed_latents_1d = RaiFlowPosEmbed1D(
-                    batch_size=batch_size,
-                    seq_len=latents_seq_len,
-                    device=hidden_states.device,
-                    dtype=torch.float32,
-                    secondary_seq_len=encoder_seq_len,
-                    base_seq_len=self.base_seq_len,
-                    timestep=timestep.to(dtype=torch.float32),
-                )
+        with torch.no_grad():
+            posed_latents_2d = RaiFlowPosEmbed2D(
+                batch_size=batch_size,
+                height=height,
+                width=width,
+                device=hidden_states.device,
+                dtype=dtype,
+            )
+            posed_latents_1d = RaiFlowPosEmbed1D(
+                batch_size=batch_size,
+                seq_len=latents_seq_len,
+                device=hidden_states.device,
+                dtype=dtype,
+                secondary_seq_len=encoder_seq_len,
+                base_seq_len=self.base_seq_len,
+                timestep=timestep,
+                is_latent=True,
+            )
 
-            hidden_states = hidden_states.to(dtype=torch.float32)
-            hidden_states = torch.addcmul(self.shift_latent, hidden_states, self.scale_latent)
-            hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
-            hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.patch_size)
-            hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
-            hidden_states = self.latent_embedder(hidden_states, height=patched_height, width=patched_width)
-            hidden_states = hidden_states.to(dtype=dtype)
-            return hidden_states
+        hidden_states = torch.addcmul(self.shift_latent, hidden_states, self.scale_latent)
+        hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
+        hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.patch_size)
+        hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
+        hidden_states = self.latent_embedder(hidden_states, height=patched_height, width=patched_width)
+        return hidden_states
 
 
 class RaiFlowTextEmbedder(nn.Module):
@@ -108,6 +106,7 @@ class RaiFlowTextEmbedder(nn.Module):
                 secondary_seq_len=latents_seq_len,
                 base_seq_len=self.base_seq_len,
                 timestep=timestep,
+                is_latent=True,
             )
 
         encoder_hidden_states = self.embed_tokens(encoder_hidden_states)
@@ -144,21 +143,20 @@ class RaiFlowLatentUnembedder(nn.Module):
         patched_height: int,
         patched_width: int,
     ):
-        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
-            hidden_states = hidden_states.to(dtype=torch.float32)
-            hidden_states = self.norm_unembed(hidden_states)
-            hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
-            hidden_states = torch.addcmul(self.shift_latent_out, hidden_states, self.scale_latent_out)
-            hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.patch_size, original_height=height, original_width=width)
-            return hidden_states
+        hidden_states = self.norm_unembed(hidden_states)
+        hidden_states = self.unembedder(hidden_states, height=patched_height, width=patched_width)
+        hidden_states = torch.addcmul(self.shift_latent_out, hidden_states, self.scale_latent_out)
+        hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.patch_size, original_height=height, original_width=width)
+        return hidden_states
 
 
-def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, device: torch.device, dtype: torch.dtype, secondary_seq_len: int, base_seq_len: int, timestep: torch.FloatTensor) -> torch.FloatTensor:
+def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, device: torch.device, dtype: torch.dtype, secondary_seq_len: int, base_seq_len: int, timestep: torch.FloatTensor, is_latent: bool) -> torch.FloatTensor:
     ones = torch.ones((batch_size, seq_len, 1), device=device, dtype=dtype)
 
-    # Create 1D linspace tensors on the target device
+    # Create 1D linspace positions
     posed_embeds_ch0 = torch.linspace(start=0, end=1, steps=seq_len, device=device, dtype=dtype)
-    posed_embeds_ch1 = torch.linspace(start=0, end=1, steps=(seq_len + secondary_seq_len), device=device, dtype=dtype)[:seq_len]
+    posed_embeds_ch1 = torch.linspace(start=0, end=1, steps=(seq_len + secondary_seq_len), device=device, dtype=dtype)
+    posed_embeds_ch1 = posed_embeds_ch1[secondary_seq_len if is_latent else seq_len :]
     posed_embeds_ch2 = ones * (seq_len / base_seq_len)
     posed_embeds_ch3 = ones * timestep
 
@@ -172,21 +170,15 @@ def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, device: torch.device, dtype
 
 def RaiFlowPosEmbed2D(batch_size: int, height: int, width: int, device: torch.device, dtype: torch.dtype) -> torch.FloatTensor:
     max_dim = max(width, height)
+    max_dim_linspace = torch.linspace(0, 1, max_dim, device=device, dtype=dtype)
 
-    # create 1D linspace tensors on the target device
-    width_1d = torch.linspace(0, 1, width, device=device, dtype=dtype)
-    height_1d = torch.linspace(0, 1, height, device=device, dtype=dtype)
-    max_dim_width_1d = torch.linspace(0, 1, max_dim, device=device, dtype=dtype)[:width]
-    max_dim_height_1d = torch.linspace(0, 1, max_dim, device=device, dtype=dtype)[:height]
+    # create 2D linspace positions grid
+    posed_latents_ch0 = torch.linspace(0, 1, height, device=device, dtype=dtype).reshape(height, 1).repeat(1, width)
+    posed_latents_ch1 = max_dim_linspace[:height].reshape(height, 1).repeat(1, width)
+    posed_latents_ch2 = torch.linspace(0, 1, width, device=device, dtype=dtype).reshape(1, width).repeat(height, 1)
+    posed_latents_ch3 = max_dim_linspace[:width].reshape(1, width).repeat(height, 1)
 
-
-    # broadcast to create 2D linspace grids
-    posed_latents_ch0 = height_1d.reshape(height, 1).repeat(1, width)
-    posed_latents_ch1 = max_dim_height_1d.reshape(height, 1).repeat(1, width)
-    posed_latents_ch2 = width_1d.reshape(1, width).repeat(height, 1)
-    posed_latents_ch3 = max_dim_width_1d.reshape(1, width).repeat(height, 1)
-
-    # stack and repeat
+    # stack and repeat for batch_size
     posed_latents = torch.stack([posed_latents_ch0, posed_latents_ch1, posed_latents_ch2, posed_latents_ch3], dim=0) # (4, height, width)
     posed_latents = posed_latents.unsqueeze(0).repeat(batch_size, 1, 1, 1) # (batch_size, 4, height, width)
     return posed_latents
