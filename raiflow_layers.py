@@ -47,6 +47,7 @@ class RaiFlowFeedForward(nn.Module):
 
         self.ff_proj = nn.Linear(dim, inner_dim, bias=True)
         self.ff_out = nn.Linear(inner_dim, dim_out, bias=True)
+        self.bias = nn.Parameter(torch.zeros(inner_dim))
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        return self.ff_out(self.ff_gate(hidden_states) * self.ff_proj(hidden_states))
+        return self.ff_out(torch.addcmul(self.bias, self.ff_gate(hidden_states), self.ff_proj(hidden_states)))
