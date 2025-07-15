@@ -12,7 +12,7 @@ from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscal
 from diffusers.models.attention_processor import Attention
 from diffusers.models.modeling_utils import ModelMixin
 
-from .raiflow_layers import RaiFlowFeedForward, DynamicTanh
+from .raiflow_layers import RaiFlowFeedForward, RaiFlowDynamicTanh
 from .raiflow_atten import RaiFlowAttnProcessor2_0, RaiFlowCrossAttnProcessor2_0
 from .raiflow_embedder import RaiFlowLatentEmbedder, RaiFlowTextEmbedder, RaiFlowLatentUnembedder
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
@@ -54,7 +54,7 @@ class RaiFlowSingleTransformerBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
-        self.norm_attn = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.norm_attn = RaiFlowDynamicTanh(dim=dim)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -70,10 +70,10 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             eps=eps,
         )
         if qk_norm == "dynamic_tanh":
-            self.attn.norm_q = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
-            self.attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+            self.attn.norm_q = RaiFlowDynamicTanh(dim=attention_head_dim)
+            self.attn.norm_k = RaiFlowDynamicTanh(dim=attention_head_dim)
 
-        self.norm_ff = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.norm_ff = RaiFlowDynamicTanh(dim=dim)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
@@ -116,8 +116,8 @@ class RaiFlowJointTransformerBlock(nn.Module):
                 "The current PyTorch version does not support the `scaled_dot_product_attention` function."
             )
 
-        self.norm_attn = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
-        self.norm_attn_context = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.norm_attn = RaiFlowDynamicTanh(dim=dim)
+        self.norm_attn_context = RaiFlowDynamicTanh(dim=dim)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -134,10 +134,10 @@ class RaiFlowJointTransformerBlock(nn.Module):
             eps=eps,
         )
         if qk_norm == "dynamic_tanh":
-            self.attn.norm_q = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
-            self.attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
-            self.attn.norm_added_q = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
-            self.attn.norm_added_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+            self.attn.norm_q = RaiFlowDynamicTanh(dim=attention_head_dim)
+            self.attn.norm_k = RaiFlowDynamicTanh(dim=attention_head_dim)
+            self.attn.norm_added_q = RaiFlowDynamicTanh(dim=attention_head_dim)
+            self.attn.norm_added_k = RaiFlowDynamicTanh(dim=attention_head_dim)
 
         self.encoder_transformer = RaiFlowSingleTransformerBlock(
             dim=dim,
@@ -206,7 +206,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             )
 
 
-        self.norm_cross_attn = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.norm_cross_attn = RaiFlowDynamicTanh(dim=dim)
         self.cross_attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -222,10 +222,10 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             eps=eps,
         )
         if qk_norm == "dynamic_tanh":
-            self.cross_attn.norm_q = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
-            self.cross_attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+            self.cross_attn.norm_q = RaiFlowDynamicTanh(dim=attention_head_dim)
+            self.cross_attn.norm_k = RaiFlowDynamicTanh(dim=attention_head_dim)
 
-        self.norm_attn = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.norm_attn = RaiFlowDynamicTanh(dim=dim)
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -241,10 +241,10 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             eps=eps,
         )
         if qk_norm == "dynamic_tanh":
-            self.attn.norm_q = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
-            self.attn.norm_k = DynamicTanh(dim=attention_head_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+            self.attn.norm_q = RaiFlowDynamicTanh(dim=attention_head_dim)
+            self.attn.norm_k = RaiFlowDynamicTanh(dim=attention_head_dim)
 
-        self.norm_ff = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.norm_ff = RaiFlowDynamicTanh(dim=dim)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
@@ -283,10 +283,11 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
     _supports_gradient_checkpointing = True
     _skip_layerwise_casting_patterns = [
-        "text_embedder", "embed_tokens", "latent_embedder", "unembedder", "norm_unembed",
-        "scale_latent", "shift_latent", "scale_latent_out", "shift_latent_out", "bias",
-        "norm_ff", "norm_attn", "norm_attn_context", "norm_cross_attn",
-        "norm", "norm_q", "norm_k", "norm_added_q", "norm_added_k",
+        "latent_embedder", "unembedder", "text_embedder", "token_embedding",
+        "norm_unembed", "norm_ff", "norm_attn", "norm_attn_context", "norm",
+        "norm_cross_attn","norm_q", "norm_k", "norm_added_q", "norm_added_k",
+        "shift_latent", "shift_latent_out", "shift_in", "shift_out", "bias",
+        "scale_latent", "scale_latent_out", "scale_in", "scale_out",
     ]
 
     @register_to_config
@@ -359,7 +360,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
-        self.norm_context = DynamicTanh(dim=self.inner_dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.norm_context = RaiFlowDynamicTanh(dim=self.inner_dim)
 
         self.cond_transformer_blocks = nn.ModuleList(
             [
@@ -444,7 +445,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     "Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective."
                 )
 
-        dtype = self.text_embedder.embed_tokens.weight.dtype # pipe can be quantized
+        dtype = self.text_embedder.token_embedding.weight.dtype # pipe can be quantized
         use_checkpointing = torch.is_grad_enabled() and self.gradient_checkpointing
 
         batch_size, channels, height, width = hidden_states.shape

@@ -4,7 +4,7 @@ from .raiflow_atten import RaiFlowAttnProcessor2_0, RaiFlowCrossAttnProcessor2_0
 from .raiflow_pipeline_output import RaiFlowPipelineOutput, RaiFlowTransformer2DModelOutput # noqa:F401
 from .raiflow_pipeline import RaiFlowPipeline # noqa:F401
 from .raiflow_image_encoder import RaiFlowImageEncoder # noqa:F401
-from .raiflow_layers import RaiFlowFeedForward, DynamicTanh # noqa:F401
+from .raiflow_layers import RaiFlowFeedForward, RaiFlowDynamicTanh # noqa:F401
 
 
 # diffusers fails to load the models without these:

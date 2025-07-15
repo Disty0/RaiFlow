@@ -3,7 +3,7 @@ from torch import nn
 
 from diffusers.utils import logging
 
-from .raiflow_layers import RaiFlowFeedForward, DynamicTanh
+from .raiflow_layers import RaiFlowFeedForward, RaiFlowDynamicTanh
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -73,7 +73,7 @@ class RaiFlowTextEmbedder(nn.Module):
 
         self.embedding_dim = embedding_dim
         self.base_seq_len = base_seq_len
-        self.embed_tokens = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
+        self.token_embedding = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
         self.text_embedder = RaiFlowFeedForward(dim=dim, dim_out=dim_out, ff_mult=ff_mult, dropout=dropout)
 
     def forward(
@@ -97,7 +97,7 @@ class RaiFlowTextEmbedder(nn.Module):
                 is_latent=True,
             )
 
-        encoder_hidden_states = self.embed_tokens(encoder_hidden_states)
+        encoder_hidden_states = self.token_embedding(encoder_hidden_states)
         encoder_hidden_states = torch.cat([encoder_hidden_states, posed_encoder_1d], dim=2)
         encoder_hidden_states = self.text_embedder(encoder_hidden_states)
         return encoder_hidden_states
@@ -117,7 +117,7 @@ class RaiFlowLatentUnembedder(nn.Module):
         self.patch_size = patch_size
         self.scale_latent_out = nn.Parameter(torch.ones(dim_out))
         self.shift_latent_out = nn.Parameter(torch.zeros(dim_out))
-        self.norm_unembed = DynamicTanh(dim=dim, init_alpha=0.2, elementwise_affine=True, bias=True)
+        self.norm_unembed = RaiFlowDynamicTanh(dim=dim)
         self.unembedder = RaiFlowFeedForward(dim=dim, dim_out=dim_out, ff_mult=ff_mult, dropout=dropout)
 
     def forward(
