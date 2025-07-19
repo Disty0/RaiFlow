@@ -69,9 +69,11 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             elementwise_affine=True,
             eps=eps,
         )
+        self.attn.fuse_projections()
+        del self.attn.to_q, self.attn.to_k, self.attn.to_v
         if qk_norm == "dynamic_tanh":
-            self.attn.norm_q = RaiFlowDynamicTanh(dim=attention_head_dim)
-            self.attn.norm_k = RaiFlowDynamicTanh(dim=attention_head_dim)
+            self.attn.norm_q = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
+            self.attn.norm_k = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
 
         self.norm_ff = RaiFlowDynamicTanh(dim=dim)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
@@ -133,11 +135,14 @@ class RaiFlowJointTransformerBlock(nn.Module):
             elementwise_affine=True,
             eps=eps,
         )
+        self.attn.fuse_projections()
+        del self.attn.to_q, self.attn.to_k, self.attn.to_v
+        del self.attn.add_q_proj, self.attn.add_k_proj, self.attn.add_v_proj
         if qk_norm == "dynamic_tanh":
-            self.attn.norm_q = RaiFlowDynamicTanh(dim=attention_head_dim)
-            self.attn.norm_k = RaiFlowDynamicTanh(dim=attention_head_dim)
-            self.attn.norm_added_q = RaiFlowDynamicTanh(dim=attention_head_dim)
-            self.attn.norm_added_k = RaiFlowDynamicTanh(dim=attention_head_dim)
+            self.attn.norm_q = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
+            self.attn.norm_k = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
+            self.attn.norm_added_q = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
+            self.attn.norm_added_k = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
 
         self.encoder_transformer = RaiFlowSingleTransformerBlock(
             dim=dim,
@@ -209,7 +214,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         self.norm_cross_attn = RaiFlowDynamicTanh(dim=dim)
         self.cross_attn = Attention(
             query_dim=dim,
-            cross_attention_dim=None,
+            cross_attention_dim=dim,
             added_kv_proj_dim=None,
             dim_head=attention_head_dim,
             heads=num_attention_heads,
@@ -221,9 +226,11 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             elementwise_affine=True,
             eps=eps,
         )
+        self.cross_attn.fuse_projections()
+        del self.cross_attn.to_k, self.cross_attn.to_v
         if qk_norm == "dynamic_tanh":
-            self.cross_attn.norm_q = RaiFlowDynamicTanh(dim=attention_head_dim)
-            self.cross_attn.norm_k = RaiFlowDynamicTanh(dim=attention_head_dim)
+            self.cross_attn.norm_q = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
+            self.cross_attn.norm_k = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
 
         self.norm_attn = RaiFlowDynamicTanh(dim=dim)
         self.attn = Attention(
@@ -240,9 +247,11 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             elementwise_affine=True,
             eps=eps,
         )
+        self.attn.fuse_projections()
+        del self.attn.to_q, self.attn.to_k, self.attn.to_v
         if qk_norm == "dynamic_tanh":
-            self.attn.norm_q = RaiFlowDynamicTanh(dim=attention_head_dim)
-            self.attn.norm_k = RaiFlowDynamicTanh(dim=attention_head_dim)
+            self.attn.norm_q = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
+            self.attn.norm_k = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
 
         self.norm_ff = RaiFlowDynamicTanh(dim=dim)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
