@@ -11,7 +11,11 @@ def dispatch_attention_fn(
     dropout_p: float = 0.0,
     is_causal: bool = False,
     scale: Optional[float] = None,
+    enable_gqa: bool = False,
+    **kwargs,
 ) -> torch.Tensor:
+    if enable_gqa:
+        kwargs["enable_gqa"] = enable_gqa
     query, key, value = (x.permute(0, 2, 1, 3) for x in (query, key, value))
     out = torch.nn.functional.scaled_dot_product_attention(
         query=query,
@@ -21,6 +25,7 @@ def dispatch_attention_fn(
         dropout_p=dropout_p,
         is_causal=is_causal,
         scale=scale,
+        **kwargs,
     )
     out = out.permute(0, 2, 1, 3)
     return out
