@@ -21,13 +21,39 @@ class RaiFlowDynamicTanh(nn.Module):
         return hidden_states
 
 
+# this is to support int8 matmul, otherwise it is the same thing as normal Conv1d
+class LinearConv1d(nn.Module):
+    def __init__(self, dim: int, dim_out: int, kernel_size: int = 3, stride: int = 1, padding: int = 1, dilation: int = 1, bias=True, padding_mode='zeros'):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.dilation = dilation
+        if padding_mode == "zeros":
+            self.padding_mode = "constant"
+        else:
+            self.padding_mode = padding_mode
+        if isinstance(padding, int):
+            self.padding = (0, 0, padding, padding)
+        else:
+            self.padding = (0,0) + padding
+
+        self.linear = nn.Linear((dim * kernel_size), dim_out, bias=bias)
+
+    def forward(self, hidden_states):
+        hidden_states = torch.nn.functional.pad(hidden_states, self.padding, mode=self.padding_mode).unfold(1, self.kernel_size, self.stride).flatten(-2,-1)
+        if self.dilation > 1:
+            hidden_states = hidden_states[:, ::self.dilation, :]
+        hidden_states = self.linear(hidden_states)
+        return hidden_states
+
+
 class RaiFlowFeedForward(nn.Module):
     def __init__(self, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1):
         super().__init__()
         inner_dim = int(max(dim, dim_out) * ff_mult)
 
         self.ff_gate = nn.Sequential(
-            nn.Linear(dim, inner_dim, bias=True),
+            LinearConv1d(dim, inner_dim, kernel_size=3, padding=1, bias=True),
             nn.GELU(approximate="none"),
             nn.Dropout(dropout),
         )

@@ -297,6 +297,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         "norm_cross_attn","norm_q", "norm_k", "norm_added_q", "norm_added_k",
         "shift_latent", "shift_latent_out", "shift_in", "shift_out", "bias",
         "scale_latent", "scale_latent_out", "scale_in", "scale_out",
+        "scale_joint_hidden_states", "scale_context_hidden_states",
+        "scale_cond_hidden_states", "scale_refiner_hidden_states",
     ]
 
     @register_to_config
@@ -370,6 +372,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         )
 
         self.norm_context = RaiFlowDynamicTanh(dim=self.inner_dim)
+        self.scale_context_hidden_states = torch.nn.Parameter(torch.ones(self.inner_dim))
+        self.scale_joint_hidden_states = torch.nn.Parameter(torch.ones(self.inner_dim))
 
         self.cond_transformer_blocks = nn.ModuleList(
             [
@@ -386,6 +390,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
+        self.scale_cond_hidden_states = torch.nn.Parameter(torch.ones(self.inner_dim))
         self.refiner_transformer_blocks = nn.ModuleList(
             [
                 RaiFlowSingleTransformerBlock(
@@ -401,6 +406,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
+        self.scale_refiner_hidden_states = torch.nn.Parameter(torch.ones(self.inner_dim))
         self.unembedder = RaiFlowLatentUnembedder(
             patch_size=self.config.patch_size,
             dim=self.inner_dim,
@@ -511,13 +517,20 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 width=width,
             )
 
+        residual = hidden_states
+        residual_context = encoder_hidden_states
+
         for index_block, block in enumerate(self.joint_transformer_blocks):
             if use_checkpointing:
                 hidden_states, encoder_hidden_states = self._gradient_checkpointing_func(block, hidden_states, encoder_hidden_states)
             else:
                 hidden_states, encoder_hidden_states = block(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
 
+        encoder_hidden_states = torch.addcmul(residual_context, encoder_hidden_states, self.scale_context_hidden_states)
         encoder_hidden_states = self.norm_context(encoder_hidden_states)
+
+        hidden_states = torch.addcmul(residual, hidden_states, self.scale_joint_hidden_states)
+        residual = hidden_states
 
         for index_block, block in enumerate(self.cond_transformer_blocks):
             if use_checkpointing:
@@ -525,11 +538,16 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             else:
                 hidden_states = block(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
 
+        hidden_states = torch.addcmul(residual, hidden_states, self.scale_cond_hidden_states)
+        residual = hidden_states
+
         for index_block, block in enumerate(self.refiner_transformer_blocks):
             if use_checkpointing:
                 hidden_states = self._gradient_checkpointing_func(block, hidden_states)
             else:
                 hidden_states = block(hidden_states=hidden_states)
+
+        hidden_states = torch.addcmul(residual, hidden_states, self.scale_refiner_hidden_states)
 
         if use_checkpointing:
             output = self._gradient_checkpointing_func(self.unembedder, hidden_states, height, width)
