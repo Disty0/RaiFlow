@@ -171,7 +171,6 @@ class RaiFlowJointTransformerBlock(nn.Module):
             eps=eps,
         )
 
-
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         attn_output, context_attn_output = self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=self.norm_attn_context(encoder_hidden_states))
         hidden_states = torch.addcmul(hidden_states, attn_output, self.scale_attn)
