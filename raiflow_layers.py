@@ -15,7 +15,7 @@ class RaiFlowDynamicTanh(nn.Module):
         self.shift_in = nn.Parameter(torch.zeros(dim))
         self.shift_out = nn.Parameter(torch.zeros(dim))
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         hidden_states = torch.tanh(torch.addcmul(self.shift_in, hidden_states, self.scale_in))
         hidden_states = torch.addcmul(self.shift_out, hidden_states, self.scale_out)
         return hidden_states
@@ -39,7 +39,7 @@ class LinearConv1d(nn.Module):
 
         self.linear = nn.Linear((dim * kernel_size), dim_out, bias=bias)
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         effective_kernel_size = ((self.kernel_size - 1) * self.dilation + 1) if self.dilation > 1 else self.kernel_size
         hidden_states = torch.nn.functional.pad(hidden_states, self.padding, mode=self.padding_mode).unfold(1, effective_kernel_size, self.stride)
         if self.dilation > 1:

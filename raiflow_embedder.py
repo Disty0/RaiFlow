@@ -29,7 +29,7 @@ class RaiFlowLatentEmbedder(nn.Module):
         batch_size: int,
         height: int,
         width: int,
-    ):
+    ) -> torch.FloatTensor:
         with torch.no_grad():
             posed_latents_2d = RaiFlowPosEmbed2D(
                 batch_size=batch_size,
@@ -84,7 +84,7 @@ class RaiFlowTextEmbedder(nn.Module):
         latents_seq_len: int,
         encoder_seq_len: int,
         batch_size: int,
-    ):
+    ) -> torch.FloatTensor:
         with torch.no_grad():
             posed_encoder_1d = RaiFlowPosEmbed1D(
                 batch_size=batch_size,
@@ -125,7 +125,7 @@ class RaiFlowLatentUnembedder(nn.Module):
         hidden_states: torch.FloatTensor,
         height: int,
         width: int
-    ):
+    ) -> torch.FloatTensor:
         hidden_states = self.unembedder(self.norm_unembed(hidden_states))
         hidden_states = torch.addcmul(self.shift_latent_out, hidden_states, self.scale_latent_out)
         hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.patch_size, original_height=height, original_width=width)
