@@ -43,8 +43,8 @@ class LinearConv1d(nn.Module):
         effective_kernel_size = ((self.kernel_size - 1) * self.dilation + 1) if self.dilation > 1 else self.kernel_size
         hidden_states = torch.nn.functional.pad(hidden_states, self.padding, mode=self.padding_mode).unfold(1, effective_kernel_size, self.stride)
         if self.dilation > 1:
-            batch_stride, seq_stride, channel_stride, kernel_stride = hidden_states.stride()
-            hidden_states = hidden_states.as_strided((*hidden_states.shape[:-1], self.kernel_size), (batch_stride, seq_stride, channel_stride, (kernel_stride * self.dilation)))
+            hidden_states_stride = hidden_states.stride()
+            hidden_states = hidden_states.as_strided((*hidden_states.shape[:-1], self.kernel_size), (*hidden_states_stride[:-1], (hidden_states_stride[-1] * self.dilation)))
         hidden_states = hidden_states.flatten(-2,-1)
         hidden_states = self.linear(hidden_states)
         return hidden_states
