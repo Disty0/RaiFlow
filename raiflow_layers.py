@@ -35,7 +35,7 @@ class LinearConv1d(nn.Module):
         if isinstance(padding, int):
             self.padding = (0, 0, padding, padding)
         else:
-            self.padding = (0,0) + padding
+            self.padding = (0, 0, padding[0], padding[-1])
 
         self.linear = nn.Linear((dim * kernel_size), dim_out, bias=bias)
 
