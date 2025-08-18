@@ -508,12 +508,13 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 width=width,
             )
 
+        residual = hidden_states
         for index_block, block in enumerate(self.joint_transformer_blocks):
             if use_checkpointing:
                 hidden_states, encoder_hidden_states = self._gradient_checkpointing_func(block, hidden_states, encoder_hidden_states)
             else:
                 hidden_states, encoder_hidden_states = block(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
-
+        hidden_states = residual + hidden_states
         encoder_hidden_states = self.norm_context(encoder_hidden_states)
 
         residual = hidden_states
@@ -524,11 +525,13 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 hidden_states = block(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
         hidden_states = residual + hidden_states
 
+        residual = hidden_states
         for index_block, block in enumerate(self.refiner_transformer_blocks):
             if use_checkpointing:
                 hidden_states = self._gradient_checkpointing_func(block, hidden_states)
             else:
                 hidden_states = block(hidden_states=hidden_states)
+        hidden_states = residual + hidden_states
 
         if use_checkpointing:
             output = self._gradient_checkpointing_func(self.unembedder, hidden_states, height, width)
