@@ -47,8 +47,8 @@ def idct(X, norm=None):
 
     v = torch.fft.irfft(torch.view_as_complex(V), n=V.shape[1], dim=1)
     x = v.new_zeros(v.shape)
-    x[:, ::2].add_(v[:, :N - (N // 2)])
-    x[:, 1::2].add_(v.flip([1])[:, :N // 2])
+    x[:, ::2] = v[:, :N - (N // 2)]
+    x[:, 1::2] = v.flip([1])[:, :N // 2]
 
     x = x.view(x_shape)
     return x
