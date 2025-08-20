@@ -21,10 +21,10 @@ def rgb_to_ycbcr_tensor(image: torch.ByteTensor) -> torch.FloatTensor:
     if image.dtype != torch.float32:
         img = image.to(torch.float32).div_(255)
     else:
-        image = image / 255
-    y = (img[:,:,:,0] * 0.299).add_(img[:,:,:,1] * 0.587).add_(img[:,:,:,2] * 0.114)
-    cb = (img[:,:,:,0] * -0.168935).add_(img[:,:,:,1] * -0.331665).add_(img[:,:,:,2] * 0.50059).add_(0.5)
-    cr = (img[:,:,:,0] * 0.499813).add_(img[:,:,:,1] * -0.418531).add_(img[:,:,:,2] * -0.081282).add_(0.5)
+        img = image / 255
+    y = (img[:,:,:,0] * 0.299).add_(img[:,:,:,1], alpha=0.587).add_(img[:,:,:,2], alpha=0.114)
+    cb = (img[:,:,:,0] * -0.168935).add_(img[:,:,:,1], alpha=-0.331665).add_(img[:,:,:,2], alpha=0.50059).add_(0.5)
+    cr = (img[:,:,:,0] * 0.499813).add_(img[:,:,:,1], alpha=-0.418531).add_(img[:,:,:,2], alpha=-0.081282).add_(0.5)
     ycbcr = torch.add(-1, torch.stack([y,cb,cr], dim=1), alpha=2)
     return ycbcr
 
@@ -37,8 +37,8 @@ def ycbcr_tensor_to_rgb(ycbcr: torch.FloatTensor) -> torch.ByteTensor:
     cr = ycbcr_img[:,2,:,:]
 
     r = (cr * 1.402525).add_(y)
-    g = (cb * -0.343730).add_(cr * -0.714401).add_(y)
-    b = (cb * 1.769905).add_(cr * 0.000013).add_(y)
+    g = (cb * -0.343730).add_(cr, alpha=-0.714401).add_(y)
+    b = (cb * 1.769905).add_(cr, alpha=0.000013).add_(y)
     rgb = torch.stack([r,g,b], dim=-1).mul_(255).round_().clamp_(0,255).to(torch.uint8)
     return rgb
 
