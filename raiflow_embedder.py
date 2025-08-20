@@ -155,10 +155,10 @@ def RaiFlowPosEmbed2D(batch_size: int, height: int, width: int, device: torch.de
     max_dim_linspace = torch.linspace(0, 1, max_dim, device=device, dtype=dtype)
 
     # create 2D linspace positions grid
-    posed_latents_ch0 = torch.linspace(0, 1, height, device=device, dtype=dtype).reshape(height, 1).repeat(1, width)
-    posed_latents_ch1 = max_dim_linspace[:height].reshape(height, 1).repeat(1, width)
-    posed_latents_ch2 = torch.linspace(0, 1, width, device=device, dtype=dtype).reshape(1, width).repeat(height, 1)
-    posed_latents_ch3 = max_dim_linspace[:width].reshape(1, width).repeat(height, 1)
+    posed_latents_ch0 = torch.linspace(0, 1, height, device=device, dtype=dtype).unsqueeze(-1).repeat(1, width)
+    posed_latents_ch1 = max_dim_linspace[:height].unsqueeze(-1).repeat(1, width)
+    posed_latents_ch2 = torch.linspace(0, 1, width, device=device, dtype=dtype).unsqueeze(0).repeat(height, 1)
+    posed_latents_ch3 = max_dim_linspace[:width].unsqueeze(0).repeat(height, 1)
 
     # stack and repeat for batch_size
     posed_latents = torch.stack([posed_latents_ch0, posed_latents_ch1, posed_latents_ch2, posed_latents_ch3], dim=0) # (4, height, width)
