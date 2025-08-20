@@ -39,7 +39,7 @@ def ycbcr_tensor_to_rgb(ycbcr: torch.FloatTensor) -> torch.ByteTensor:
     r = (cr * 1.402525).add_(y)
     g = (cb * -0.343730).add_(cr * -0.714401).add_(y)
     b = (cb * 1.769905).add_(cr * 0.000013).add_(y)
-    rgb = torch.stack([r,g,b], dim=-1).clamp_(0,1).mul_(255).to(torch.uint8)
+    rgb = torch.stack([r,g,b], dim=-1).mul_(255).round_().clamp_(0,255).to(torch.uint8)
     return rgb
 
 
