@@ -229,8 +229,8 @@ class RaiFlowPipeline(DiffusionPipeline):
             batch_size, seq_len = prompt_embeds.shape
             prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt)
             prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len)
-            prompt_embeds = prompt_embeds.to(device)
 
+        prompt_embeds = prompt_embeds.to(device)
         return prompt_embeds
 
     def check_inputs(
