@@ -29,8 +29,7 @@ def dispatch_attention_fn(
         is_causal=is_causal,
         scale=scale,
         **kwargs,
-    )
-    out = out.permute(0, 2, 1, 3)
+    ).permute(0, 2, 1, 3)
     return out
 
 
