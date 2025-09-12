@@ -526,7 +526,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
                 latent_model_input = latent_model_input.to(dtype=dtype)
-                # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
+                # broadcast the sigmas to batch dimension
                 timesteps = self.scheduler.sigmas[self.scheduler.step_index or i].to(device, dtype=dtype).expand(latent_model_input.shape[0])
 
                 noise_pred, hidden_states, encoder_hidden_states = self.transformer(

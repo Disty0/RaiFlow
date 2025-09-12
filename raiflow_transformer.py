@@ -2,18 +2,15 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
 from torch import nn
-import torch.nn.functional as F
 
 from diffusers.utils.torch_utils import maybe_allow_in_graph
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import PeftAdapterMixin
+from diffusers.models.modeling_utils import ModelMixin
 from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
 
-from diffusers.models.attention_processor import Attention
-from diffusers.models.modeling_utils import ModelMixin
-
 from .raiflow_layers import RaiFlowFeedForward, RaiFlowDynamicTanh
-from .raiflow_atten import RaiFlowAttnProcessor2_0, RaiFlowCrossAttnProcessor2_0
+from .raiflow_atten import RaiFlowAttention, RaiFlowAttnProcessor, RaiFlowCrossAttnProcessor
 from .raiflow_embedder import RaiFlowLatentEmbedder, RaiFlowTextEmbedder, RaiFlowLatentUnembedder
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
 
@@ -31,7 +28,6 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         attention_head_dim (`int`): The number of channels in each head.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the conv feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "dynamic_tanh"): The qk normalization to use in attention.
         eps (`float`, *optional*, defaults to 1e-05): The eps used with nn modules.
     """
 
@@ -42,38 +38,22 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         attention_head_dim: int,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        qk_norm: str = "dynamic_tanh",
         eps: float = 1e-05,
     ):
         super().__init__()
 
-        if hasattr(F, "scaled_dot_product_attention"):
-            processor = RaiFlowAttnProcessor2_0()
-        else:
-            raise ValueError(
-                "The current PyTorch version does not support the `scaled_dot_product_attention` function."
-            )
-
         self.norm_attn = RaiFlowDynamicTanh(dim=dim)
-        self.attn = Attention(
+        self.attn = RaiFlowAttention(
             query_dim=dim,
-            cross_attention_dim=None,
-            added_kv_proj_dim=None,
-            dim_head=attention_head_dim,
-            heads=num_attention_heads,
             out_dim=dim,
-            bias=True,
-            processor=processor,
+            out_context_dim=dim,
+            heads=num_attention_heads,
+            head_dim=attention_head_dim,
             dropout=dropout,
-            qk_norm=qk_norm if qk_norm != "dynamic_tanh" else None,
-            elementwise_affine=True,
-            eps=eps,
+            processor=RaiFlowAttnProcessor(),
+            is_joint_attention=False,
+            is_cross_attention=False,
         )
-        self.attn.fuse_projections()
-        del self.attn.to_q, self.attn.to_k, self.attn.to_v
-        if qk_norm == "dynamic_tanh":
-            self.attn.norm_q = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
-            self.attn.norm_k = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
 
         self.norm_ff = RaiFlowDynamicTanh(dim=dim)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
@@ -95,7 +75,6 @@ class RaiFlowJointTransformerBlock(nn.Module):
         attention_head_dim (`int`): The number of channels in each head.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the conv feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "dynamic_tanh"): The qk normalization to use in attention.
         eps (`float`, *optional*, defaults to 1e-05): The eps used with nn modules.
     """
 
@@ -106,43 +85,23 @@ class RaiFlowJointTransformerBlock(nn.Module):
         attention_head_dim: int,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        qk_norm: str = "dynamic_tanh",
         eps: float = 1e-05,
     ):
         super().__init__()
 
-        if hasattr(F, "scaled_dot_product_attention"):
-            processor = RaiFlowAttnProcessor2_0()
-        else:
-            raise ValueError(
-                "The current PyTorch version does not support the `scaled_dot_product_attention` function."
-            )
-
         self.norm_attn = RaiFlowDynamicTanh(dim=dim)
         self.norm_attn_context = RaiFlowDynamicTanh(dim=dim)
-        self.attn = Attention(
+        self.attn = RaiFlowAttention(
             query_dim=dim,
-            cross_attention_dim=None,
-            added_kv_proj_dim=dim,
-            dim_head=attention_head_dim,
-            heads=num_attention_heads,
             out_dim=dim,
-            context_pre_only=False,
-            bias=True,
-            processor=processor,
+            out_context_dim=dim,
+            heads=num_attention_heads,
+            head_dim=attention_head_dim,
             dropout=dropout,
-            qk_norm=qk_norm if qk_norm != "dynamic_tanh" else None,
-            elementwise_affine=True,
-            eps=eps,
+            processor=RaiFlowAttnProcessor(),
+            is_joint_attention=True,
+            is_cross_attention=False,
         )
-        self.attn.fuse_projections()
-        del self.attn.to_q, self.attn.to_k, self.attn.to_v
-        del self.attn.add_q_proj, self.attn.add_k_proj, self.attn.add_v_proj
-        if qk_norm == "dynamic_tanh":
-            self.attn.norm_q = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
-            self.attn.norm_k = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
-            self.attn.norm_added_q = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
-            self.attn.norm_added_k = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
 
         self.encoder_transformer = RaiFlowSingleTransformerBlock(
             dim=dim,
@@ -150,7 +109,6 @@ class RaiFlowJointTransformerBlock(nn.Module):
             attention_head_dim=attention_head_dim,
             ff_mult=ff_mult,
             dropout=dropout,
-            qk_norm=qk_norm,
             eps=eps,
         )
 
@@ -160,7 +118,6 @@ class RaiFlowJointTransformerBlock(nn.Module):
             attention_head_dim=attention_head_dim,
             ff_mult=ff_mult,
             dropout=dropout,
-            qk_norm=qk_norm,
             eps=eps,
         )
 
@@ -185,7 +142,6 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         attention_head_dim (`int`): The number of channels in each head.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the conv feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "dynamic_tanh"): The qk normalization to use in attention.
         eps (`float`, *optional*, defaults to 1e-05): The eps used with nn modules.
     """
 
@@ -196,60 +152,35 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         attention_head_dim: int,
         ff_mult: int = 2,
         dropout: float = 0.1,
-        qk_norm: str = "dynamic_tanh",
         eps: float = 1e-05,
     ):
         super().__init__()
 
-        if hasattr(F, "scaled_dot_product_attention"):
-            cross_processor = RaiFlowCrossAttnProcessor2_0()
-            processor = RaiFlowAttnProcessor2_0()
-        else:
-            raise ValueError(
-                "The current PyTorch version does not support the `scaled_dot_product_attention` function."
-            )
-
         self.norm_cross_attn = RaiFlowDynamicTanh(dim=dim)
-        self.cross_attn = Attention(
+        self.cross_attn = RaiFlowAttention(
             query_dim=dim,
-            cross_attention_dim=dim,
-            added_kv_proj_dim=None,
-            dim_head=attention_head_dim,
-            heads=num_attention_heads,
             out_dim=dim,
-            bias=True,
-            processor=cross_processor,
+            out_context_dim=dim,
+            heads=num_attention_heads,
+            head_dim=attention_head_dim,
             dropout=dropout,
-            qk_norm=qk_norm if qk_norm != "dynamic_tanh" else None,
-            elementwise_affine=True,
-            eps=eps,
+            processor=RaiFlowCrossAttnProcessor(),
+            is_joint_attention=False,
+            is_cross_attention=True,
         )
-        self.cross_attn.fuse_projections()
-        del self.cross_attn.to_k, self.cross_attn.to_v
-        if qk_norm == "dynamic_tanh":
-            self.cross_attn.norm_q = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
-            self.cross_attn.norm_k = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
 
         self.norm_attn = RaiFlowDynamicTanh(dim=dim)
-        self.attn = Attention(
+        self.attn = RaiFlowAttention(
             query_dim=dim,
-            cross_attention_dim=None,
-            added_kv_proj_dim=None,
-            dim_head=attention_head_dim,
-            heads=num_attention_heads,
             out_dim=dim,
-            bias=True,
-            processor=processor,
+            out_context_dim=dim,
+            heads=num_attention_heads,
+            head_dim=attention_head_dim,
             dropout=dropout,
-            qk_norm=qk_norm if qk_norm != "dynamic_tanh" else None,
-            elementwise_affine=True,
-            eps=eps,
+            processor=RaiFlowAttnProcessor(),
+            is_joint_attention=False,
+            is_cross_attention=False,
         )
-        self.attn.fuse_projections()
-        del self.attn.to_q, self.attn.to_k, self.attn.to_v
-        if qk_norm == "dynamic_tanh":
-            self.attn.norm_q = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
-            self.attn.norm_k = RaiFlowDynamicTanh(dim=(num_attention_heads,attention_head_dim))
 
         self.norm_ff = RaiFlowDynamicTanh(dim=dim)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
@@ -282,9 +213,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         patch_size (`int`, *optional*, (`int`, *optional*, defaults to 2):
             The size of each patch in the image. This parameter defines the resolution of patches fed into the model.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the feed forward hidden dimension.
-        embedder_ff_mult (`int`, *optional*, defaults to 8): The multiplier to use for the feed forward hidden dimension in embedder layers.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        qk_norm (`str`, *optional*, defaults to "dynamic_tanh"): The qk normalization to use in attention.
         eps (`float`, *optional*, defaults to 1e-05): The eps used with nn modules.
     """
 
@@ -316,9 +245,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         out_channels: int = None,
         patch_size: int = 1,
         ff_mult: int = 4,
-        embedder_ff_mult: int = 8,
         dropout: float = 0.1,
-        qk_norm: str = "dynamic_tanh",
         eps: float = 1e-05,
     ):
         super().__init__()
@@ -337,8 +264,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.base_seq_len,
             dim=self.patched_in_channels,
             dim_out=self.inner_dim,
-            ff_mult=self.config.embedder_ff_mult,
-            dropout=dropout,
         )
 
         self.text_embedder = RaiFlowTextEmbedder(
@@ -348,8 +273,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.config.encoder_max_sequence_length,
             dim=self.encoder_in_channels, # dim + pos
             dim_out=self.inner_dim,
-            ff_mult=self.config.embedder_ff_mult,
-            dropout=dropout,
         )
 
         self.joint_transformer_blocks = nn.ModuleList(
@@ -360,7 +283,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     attention_head_dim=self.config.attention_head_dim,
                     ff_mult=self.config.ff_mult,
                     dropout=dropout,
-                    qk_norm=qk_norm,
                     eps=eps,
                 )
                 for _ in range(self.config.num_joint_layers)
@@ -376,7 +298,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     attention_head_dim=self.config.attention_head_dim,
                     ff_mult=self.config.ff_mult,
                     dropout=dropout,
-                    qk_norm=qk_norm,
                     eps=eps,
                 )
                 for _ in range(self.config.num_layers)
@@ -391,7 +312,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     attention_head_dim=self.config.attention_head_dim,
                     ff_mult=self.config.ff_mult,
                     dropout=dropout,
-                    qk_norm=qk_norm,
                     eps=eps,
                 )
                 for _ in range(self.config.num_refiner_layers)
@@ -402,8 +322,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             patch_size=self.config.patch_size,
             dim=self.inner_dim,
             dim_out=self.out_channels,
-            ff_mult=self.config.embedder_ff_mult,
-            dropout=dropout,
         )
 
     def forward(

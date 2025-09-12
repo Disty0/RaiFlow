@@ -1,15 +1,11 @@
 import torch
 from torch import nn
 
-from diffusers.utils import logging
-
-from .raiflow_layers import RaiFlowFeedForward, RaiFlowDynamicTanh
-
-logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+from .raiflow_layers import RaiFlowDynamicTanh
 
 
 class RaiFlowLatentEmbedder(nn.Module):
-    def __init__(self, patch_size: int, in_channels: int, base_seq_len: int, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1):
+    def __init__(self, patch_size: int, in_channels: int, base_seq_len: int, dim: int, dim_out: int):
         super().__init__()
 
         self.patch_size = patch_size
@@ -17,7 +13,7 @@ class RaiFlowLatentEmbedder(nn.Module):
         self.base_seq_len = base_seq_len
         self.scale_latent = nn.Parameter(torch.ones((1, self.in_channels, 1, 1)))
         self.shift_latent = nn.Parameter(torch.zeros((1, self.in_channels, 1, 1)))
-        self.latent_embedder = RaiFlowFeedForward(dim=dim, dim_out=dim_out, ff_mult=ff_mult, dropout=dropout)
+        self.latent_embedder = nn.Linear(dim, dim_out)
 
     def forward(
         self,
@@ -58,23 +54,13 @@ class RaiFlowLatentEmbedder(nn.Module):
 
 
 class RaiFlowTextEmbedder(nn.Module):
-    def __init__(
-        self,
-        vocab_size: int,
-        embedding_dim: int,
-        pad_token_id: int,
-        base_seq_len: int,
-        dim: int,
-        dim_out: int,
-        ff_mult: int = 4,
-        dropout: float = 0.1
-    ):
+    def __init__(self, vocab_size: int, embedding_dim: int, pad_token_id: int, base_seq_len: int, dim: int, dim_out: int):
         super().__init__()
 
         self.embedding_dim = embedding_dim
         self.base_seq_len = base_seq_len
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
-        self.text_embedder = RaiFlowFeedForward(dim=dim, dim_out=dim_out, ff_mult=ff_mult, dropout=dropout)
+        self.text_embedder = nn.Linear(dim, dim_out)
 
     def forward(
         self,
@@ -104,21 +90,14 @@ class RaiFlowTextEmbedder(nn.Module):
 
 
 class RaiFlowLatentUnembedder(nn.Module):
-    def __init__(
-        self,
-        patch_size: int,
-        dim: int,
-        dim_out: int,
-        ff_mult: int = 4,
-        dropout: float = 0.1
-    ):
+    def __init__(self, patch_size: int, dim: int, dim_out: int):
         super().__init__()
 
         self.patch_size = patch_size
         self.scale_latent_out = nn.Parameter(torch.ones(dim_out))
         self.shift_latent_out = nn.Parameter(torch.zeros(dim_out))
         self.norm_unembed = RaiFlowDynamicTanh(dim=dim)
-        self.unembedder = RaiFlowFeedForward(dim=dim, dim_out=dim_out, ff_mult=ff_mult, dropout=dropout)
+        self.unembedder = nn.Linear(dim, dim_out)
 
     def forward(
         self,
