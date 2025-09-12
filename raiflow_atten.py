@@ -49,7 +49,6 @@ class RaiFlowAttention(torch.nn.Module):
     ):
         super().__init__()
 
-        self.processor = processor
         self.query_dim = query_dim
         self.is_joint_attention = is_joint_attention
         self.is_cross_attention = is_cross_attention
@@ -60,6 +59,7 @@ class RaiFlowAttention(torch.nn.Module):
 
         self.out_dim = out_dim if out_dim is not None else self.query_dim
         self.out_context_dim = out_context_dim if out_context_dim is not None else self.query_dim
+        self.processor = processor if processor is not None else RaiFlowAttnProcessor()
 
         self.to_out = nn.Sequential(
             nn.Linear(self.inner_dim, self.out_dim, bias=True),
