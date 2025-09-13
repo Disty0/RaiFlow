@@ -60,11 +60,13 @@ class RaiFlowAttention(torch.nn.Module):
         self.out_context_dim = out_context_dim if out_context_dim is not None else self.query_dim
         self.processor = processor if processor is not None else RaiFlowAttnProcessor()
 
-        self.to_out = nn.Sequential(
-            nn.Linear(self.inner_dim, self.out_dim, bias=True),
+        self.gate = nn.Sequential(
+            nn.Linear(self.query_dim, self.inner_dim, bias=True),
+            nn.GELU(approximate="none"),
             nn.Dropout(dropout),
         )
 
+        self.to_out = nn.Linear(self.inner_dim, self.out_dim, bias=True)
         self.norm_q = RaiFlowDynamicTanh(dim=(self.heads,self.head_dim))
         self.norm_k = RaiFlowDynamicTanh(dim=(self.heads,self.head_dim))
 
@@ -78,10 +80,7 @@ class RaiFlowAttention(torch.nn.Module):
             self.to_added_qkv = nn.Linear(self.query_dim, self.inner_dim*3, bias=True)
             self.norm_added_q = RaiFlowDynamicTanh(dim=(self.heads,self.head_dim))
             self.norm_added_k = RaiFlowDynamicTanh(dim=(self.heads,self.head_dim))
-            self.to_add_out = nn.Sequential(
-                nn.Linear(self.inner_dim, self.out_context_dim, bias=True),
-                nn.Dropout(dropout),
-            )
+            self.to_add_out = nn.Linear(self.inner_dim, self.out_context_dim, bias=True)
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: Optional[torch.FloatTensor] = None) -> torch.FloatTensor:
         return self.processor(
@@ -117,6 +116,9 @@ class RaiFlowAttnProcessor:
             value = torch.cat([encoder_hidden_states_value_proj, value], dim=1)
 
         attn_output = dispatch_attention_fn(query, key, value).flatten(-2, -1).to(query.dtype)
+        attn_output = attn_output * attn.gate(
+            torch.cat([encoder_hidden_states, hidden_states], dim=1) if encoder_hidden_states is not None else hidden_states
+        )
 
         if encoder_hidden_states is not None:
             attn_output, context_attn_output = attn_output[:, encoder_seq_len :], attn_output[:, : encoder_seq_len]
@@ -141,6 +143,6 @@ class RaiFlowCrossAttnProcessor:
         key = attn.norm_k(key)
 
         attn_output = dispatch_attention_fn(query, key, value).flatten(-2, -1).to(query.dtype)
-        attn_output = attn.to_out(attn_output)
+        attn_output = attn.to_out(attn_output * attn.gate(hidden_states))
 
         return attn_output
