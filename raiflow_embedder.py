@@ -105,8 +105,7 @@ class RaiFlowLatentUnembedder(nn.Module):
         height: int,
         width: int
     ) -> torch.FloatTensor:
-        hidden_states = self.unembedder(self.norm_unembed(hidden_states))
-        hidden_states = torch.addcmul(self.shift_latent_out, hidden_states, self.scale_latent_out)
+        hidden_states = torch.addcmul(self.shift_latent_out, self.unembedder(self.norm_unembed(hidden_states)), self.scale_latent_out)
         hidden_states = unpack_1d_latents_to_2d(hidden_states, patch_size=self.patch_size, original_height=height, original_width=width)
         return hidden_states
 
