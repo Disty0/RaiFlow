@@ -299,7 +299,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                 f" size of {batch_size}. Make sure the batch size matches the length of the generators."
             )
 
-        latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype).to(device, dtype=dtype) # xpu always returns float32
+        latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
 
         return latents
 
