@@ -42,7 +42,7 @@ def ycbcr_tensor_to_rgb(ycbcr: torch.FloatTensor) -> torch.ByteTensor:
 
 
 @torch.no_grad()
-def encode_single_channel_dct_2d(img: torch.FloatTensor, block_size: int=16, norm: str='ortho') -> torch.FloatTensor:
+def encode_single_channel_dct_2d(img: torch.FloatTensor, block_size: int=16, norm: str="ortho") -> torch.FloatTensor:
     batch_size, height, width = img.shape
     h_blocks = int(height//block_size)
     w_blocks = int(width//block_size)
@@ -57,7 +57,7 @@ def encode_single_channel_dct_2d(img: torch.FloatTensor, block_size: int=16, nor
 
 
 @torch.no_grad()
-def decode_single_channel_dct_2d(img: torch.FloatTensor, norm: str='ortho') -> torch.FloatTensor:
+def decode_single_channel_dct_2d(img: torch.FloatTensor, norm: str="ortho") -> torch.FloatTensor:
     batch_size, combined_block_size, h_blocks, w_blocks = img.shape
     block_size = int(math.sqrt(combined_block_size))
     height = int(h_blocks*block_size)
@@ -70,7 +70,7 @@ def decode_single_channel_dct_2d(img: torch.FloatTensor, norm: str='ortho') -> t
 
 
 @torch.no_grad()
-def encode_jpeg_tensor(img: torch.FloatTensor, block_size: int=16, cbcr_downscale: int=2, norm: str='ortho') -> torch.FloatTensor:
+def encode_jpeg_tensor(img: torch.FloatTensor, block_size: int=16, cbcr_downscale: int=2, norm: str="ortho") -> torch.FloatTensor:
     img = img[:, :, :(img.shape[-2]//block_size)*block_size, :(img.shape[-1]//block_size)*block_size] # crop to a multiply of block_size
     cbcr_block_size = block_size//cbcr_downscale
     _, _, height, width = img.shape
@@ -83,7 +83,7 @@ def encode_jpeg_tensor(img: torch.FloatTensor, block_size: int=16, cbcr_downscal
 
 
 @torch.no_grad()
-def decode_jpeg_tensor(jpeg_img: torch.FloatTensor, block_size: int=16, cbcr_downscale: int=2, norm: str='ortho') -> torch.FloatTensor:
+def decode_jpeg_tensor(jpeg_img: torch.FloatTensor, block_size: int=16, cbcr_downscale: int=2, norm: str="ortho") -> torch.FloatTensor:
     _, _, h_blocks, w_blocks = jpeg_img.shape
     y_block_size = block_size*block_size
     cbcr_block_size = int((block_size//cbcr_downscale) ** 2)
@@ -224,7 +224,7 @@ def dct(x, norm=None):
     n_W_i = -torch.sin(k)
 
     V = torch.addcmul((Vc[:, :, 0] * W_r), Vc[:, :, 1], n_W_i)
-    if norm == 'ortho':
+    if norm == "ortho":
         V[:, 0].mul_(0.5 / math.sqrt(N))
         V[:, 1:].mul_(0.5 / math.sqrt(N / 2))
 
@@ -238,7 +238,7 @@ def idct(X, norm=None):
     N = x_shape[-1]
 
     X_v = X.contiguous().view(-1, N).div_(2)
-    if norm == 'ortho':
+    if norm == "ortho":
         X_v[:, 0].mul_(math.sqrt(N) * 2)
         X_v[:, 1:].mul_(math.sqrt(N / 2) * 2)
 
