@@ -79,7 +79,8 @@ def encode_jpeg_tensor(img: torch.FloatTensor, block_size: int=16, cbcr_downscal
     y = encode_single_channel_dct_2d(img[:, 0, :,:], block_size=block_size, norm=norm)
     cb = encode_single_channel_dct_2d(down_img[:, 0, :,:], block_size=cbcr_block_size, norm=norm)
     cr = encode_single_channel_dct_2d(down_img[:, 1, :,:], block_size=cbcr_block_size, norm=norm)
-    return torch.cat([y,cb,cr], dim=1)
+    ycbcr = torch.cat([y,cb,cr], dim=1)
+    return ycbcr
 
 
 @torch.no_grad()
@@ -97,7 +98,8 @@ def decode_jpeg_tensor(jpeg_img: torch.FloatTensor, block_size: int=16, cbcr_dow
     upsample = torchvision.transforms.Resize((h_blocks*block_size, w_blocks*block_size), interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
     cb = upsample(cb)
     cr = upsample(cr)
-    return torch.stack([y,cb,cr], dim=1)
+    ycbcr = torch.stack([y,cb,cr], dim=1)
+    return ycbcr
 
 
 def process_image_input(images: PipelineImageInput) -> torch.ByteTensor:
