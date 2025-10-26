@@ -3,7 +3,6 @@ from typing import Any, Dict, Optional, Tuple, Union
 import torch
 from torch import nn
 
-from diffusers.utils.torch_utils import maybe_allow_in_graph
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import PeftAdapterMixin
 from diffusers.models.modeling_utils import ModelMixin
@@ -35,7 +34,6 @@ class RaiFlowFeedForward(nn.Module):
         return self.ff_out(torch.addcmul(self.bias, self.ff_gate(hidden_states), self.ff_proj(hidden_states)))
 
 
-@maybe_allow_in_graph
 class RaiFlowSingleTransformerBlock(nn.Module):
     r"""
     A Single Transformer block as part of the RaiFlow MMDit architecture.
@@ -82,7 +80,6 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         return hidden_states
 
 
-@maybe_allow_in_graph
 class RaiFlowJointTransformerBlock(nn.Module):
     r"""
     A Joint Transformer block as part of the RaiFlow MMDit architecture.
@@ -149,7 +146,6 @@ class RaiFlowJointTransformerBlock(nn.Module):
         return hidden_states, encoder_hidden_states
 
 
-@maybe_allow_in_graph
 class RaiFlowConditionalTransformer2DBlock(nn.Module):
     r"""
     A Conditional Transformer block as part of the RaiFlow MMDit architecture.
