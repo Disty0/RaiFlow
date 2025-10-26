@@ -9,12 +9,30 @@ from diffusers.loaders import PeftAdapterMixin
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
 
-from .raiflow_layers import RaiFlowFeedForward, RaiFlowDynamicTanh
 from .raiflow_atten import RaiFlowAttention, RaiFlowAttnProcessor, RaiFlowCrossAttnProcessor
 from .raiflow_embedder import RaiFlowLatentEmbedder, RaiFlowTextEmbedder, RaiFlowLatentUnembedder
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+
+
+class RaiFlowFeedForward(nn.Module):
+    def __init__(self, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1):
+        super().__init__()
+        inner_dim = int(max(dim, dim_out) * ff_mult)
+
+        self.ff_gate = nn.Sequential(
+            nn.Linear(dim, inner_dim, bias=True),
+            nn.GELU(approximate="none"),
+            nn.Dropout(dropout),
+        )
+
+        self.ff_proj = nn.Linear(dim, inner_dim, bias=True)
+        self.ff_out = nn.Linear(inner_dim, dim_out, bias=True)
+        self.bias = nn.Parameter(torch.zeros(inner_dim))
+
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        return self.ff_out(torch.addcmul(self.bias, self.ff_gate(hidden_states), self.ff_proj(hidden_states)))
 
 
 @maybe_allow_in_graph
@@ -42,7 +60,7 @@ class RaiFlowSingleTransformerBlock(nn.Module):
     ):
         super().__init__()
 
-        self.norm_attn = RaiFlowDynamicTanh(dim=dim)
+        self.norm_attn = nn.RMSNorm(dim)
         self.attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -55,7 +73,7 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             is_cross_attention=False,
         )
 
-        self.norm_ff = RaiFlowDynamicTanh(dim=dim)
+        self.norm_ff = nn.RMSNorm(dim)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
@@ -89,8 +107,8 @@ class RaiFlowJointTransformerBlock(nn.Module):
     ):
         super().__init__()
 
-        self.norm_attn = RaiFlowDynamicTanh(dim=dim)
-        self.norm_attn_context = RaiFlowDynamicTanh(dim=dim)
+        self.norm_attn = nn.RMSNorm(dim)
+        self.norm_attn_context = nn.RMSNorm(dim)
         self.attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -156,7 +174,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
     ):
         super().__init__()
 
-        self.norm_cross_attn = RaiFlowDynamicTanh(dim=dim)
+        self.norm_cross_attn = nn.RMSNorm(dim)
         self.cross_attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -169,7 +187,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             is_cross_attention=True,
         )
 
-        self.norm_attn = RaiFlowDynamicTanh(dim=dim)
+        self.norm_attn = nn.RMSNorm(dim)
         self.attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -182,7 +200,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             is_cross_attention=False,
         )
 
-        self.norm_ff = RaiFlowDynamicTanh(dim=dim)
+        self.norm_ff = nn.RMSNorm(dim)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
@@ -289,7 +307,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
-        self.norm_context = RaiFlowDynamicTanh(dim=self.inner_dim)
+        self.norm_context = nn.RMSNorm(self.inner_dim)
         self.cond_transformer_blocks = nn.ModuleList(
             [
                 RaiFlowConditionalTransformer2DBlock(

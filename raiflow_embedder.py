@@ -1,8 +1,6 @@
 import torch
 from torch import nn
 
-from .raiflow_layers import RaiFlowDynamicTanh
-
 
 class RaiFlowLatentEmbedder(nn.Module):
     def __init__(self, patch_size: int, in_channels: int, base_seq_len: int, dim: int, dim_out: int):
@@ -96,7 +94,7 @@ class RaiFlowLatentUnembedder(nn.Module):
         self.patch_size = patch_size
         self.scale_latent_out = nn.Parameter(torch.ones(dim_out))
         self.shift_latent_out = nn.Parameter(torch.zeros(dim_out))
-        self.norm_unembed = RaiFlowDynamicTanh(dim=dim)
+        self.norm_unembed = nn.RMSNorm(dim)
         self.unembedder = nn.Linear(dim, dim_out)
 
     def forward(

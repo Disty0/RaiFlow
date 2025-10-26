@@ -3,8 +3,6 @@ from typing import Optional, Union
 import torch
 from torch import nn
 
-from .raiflow_layers import RaiFlowDynamicTanh
-
 
 def dispatch_attention_fn(
     query: torch.FloatTensor,
@@ -67,8 +65,8 @@ class RaiFlowAttention(torch.nn.Module):
         )
 
         self.to_out = nn.Linear(self.inner_dim, self.out_dim, bias=True)
-        self.norm_q = RaiFlowDynamicTanh(dim=(self.heads,self.head_dim))
-        self.norm_k = RaiFlowDynamicTanh(dim=(self.heads,self.head_dim))
+        self.norm_q = nn.RMSNorm(self.head_dim)
+        self.norm_k = nn.RMSNorm(self.head_dim)
 
         if self.is_cross_attention:
             self.to_q = nn.Linear(self.query_dim, self.inner_dim, bias=True)
@@ -78,8 +76,8 @@ class RaiFlowAttention(torch.nn.Module):
 
         if self.is_joint_attention:
             self.to_added_qkv = nn.Linear(self.query_dim, self.inner_dim*3, bias=True)
-            self.norm_added_q = RaiFlowDynamicTanh(dim=(self.heads,self.head_dim))
-            self.norm_added_k = RaiFlowDynamicTanh(dim=(self.heads,self.head_dim))
+            self.norm_added_q = nn.RMSNorm(self.head_dim)
+            self.norm_added_k = nn.RMSNorm(self.head_dim)
             self.to_add_out = nn.Linear(self.inner_dim, self.out_context_dim, bias=True)
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: Optional[torch.FloatTensor] = None) -> torch.FloatTensor:
