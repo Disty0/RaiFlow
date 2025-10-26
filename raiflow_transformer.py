@@ -8,30 +8,12 @@ from diffusers.loaders import PeftAdapterMixin
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
 
+from .raiflow_layers import RaiFlowFeedForward
 from .raiflow_atten import RaiFlowAttention, RaiFlowAttnProcessor, RaiFlowCrossAttnProcessor
 from .raiflow_embedder import RaiFlowLatentEmbedder, RaiFlowTextEmbedder, RaiFlowLatentUnembedder
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
-
-
-class RaiFlowFeedForward(nn.Module):
-    def __init__(self, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1):
-        super().__init__()
-        inner_dim = int(max(dim, dim_out) * ff_mult)
-
-        self.ff_gate = nn.Sequential(
-            nn.Linear(dim, inner_dim, bias=True),
-            nn.GELU(approximate="none"),
-            nn.Dropout(dropout),
-        )
-
-        self.ff_proj = nn.Linear(dim, inner_dim, bias=True)
-        self.ff_out = nn.Linear(inner_dim, dim_out, bias=True)
-        self.bias = nn.Parameter(torch.zeros(inner_dim))
-
-    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        return self.ff_out(torch.addcmul(self.bias, self.ff_gate(hidden_states), self.ff_proj(hidden_states)))
 
 
 class RaiFlowSingleTransformerBlock(nn.Module):
@@ -278,6 +260,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.base_seq_len,
             dim=self.patched_in_channels,
             dim_out=self.inner_dim,
+            ff_mult=self.config.ff_mult,
+            dropout=dropout,
         )
 
         self.text_embedder = RaiFlowTextEmbedder(
@@ -287,6 +271,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.config.encoder_max_sequence_length,
             dim=self.encoder_in_channels, # dim + pos
             dim_out=self.inner_dim,
+            ff_mult=self.config.ff_mult,
+            dropout=dropout,
         )
 
         self.joint_transformer_blocks = nn.ModuleList(
@@ -336,6 +322,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             patch_size=self.config.patch_size,
             dim=self.inner_dim,
             dim_out=self.out_channels,
+            ff_mult=self.config.ff_mult,
+            dropout=dropout,
         )
 
     def forward(
@@ -388,10 +376,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         batch_size, channels, height, width = hidden_states.shape
         _, encoder_seq_len = encoder_hidden_states.shape
-
-        patched_height = height // self.config.patch_size
-        patched_width = width // self.config.patch_size
-        latents_seq_len = patched_height * patched_width
+        latents_seq_len = (height // self.config.patch_size) * (width // self.config.patch_size)
 
         with torch.no_grad():
             timestep = timestep.view(batch_size, 1, 1)
