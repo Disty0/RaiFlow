@@ -116,8 +116,7 @@ class RaiFlowAttnProcessor:
             value = torch.cat([encoder_value, value], dim=1)
 
         attn_output = dispatch_attention_fn(query, key, value).flatten(-2, -1).to(dtype=query.dtype)
-        attn_output = torch.addcmul(
-            attn.bias,
+        attn_output = torch.mul(
             attn_output,
             attn.gate(torch.cat([encoder_hidden_states, hidden_states], dim=1) if encoder_hidden_states is not None else hidden_states),
         )
@@ -138,8 +137,7 @@ class RaiFlowCrossAttnProcessor:
     def __call__(self, attn: "RaiFlowAttention", hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         query, key, value = _get_qkv_projections(attn, hidden_states, encoder_hidden_states)
         attn_output = dispatch_attention_fn(query, key, value).flatten(-2, -1).to(dtype=query.dtype)
-        attn_output = torch.addcmul(attn.bias, attn_output, attn.gate(hidden_states))
-        attn_output = attn.to_out(attn_output)
+        attn_output = attn.to_out(attn_output * attn.gate(hidden_states))
         return attn_output
 
 
@@ -157,7 +155,6 @@ class RaiFlowAttention(torch.nn.Module):
         processor: Optional[Union["RaiFlowAttnProcessor", "RaiFlowCrossAttnProcessor"]] = None,
     ):
         super().__init__()
-
         self.query_dim = query_dim
         self.is_joint_attention = is_joint_attention
         self.is_cross_attention = is_cross_attention
@@ -171,7 +168,6 @@ class RaiFlowAttention(torch.nn.Module):
         self.out_context_dim = out_context_dim if out_context_dim is not None else self.query_dim
         self.processor = processor if processor is not None else RaiFlowAttnProcessor()
 
-        self.bias = nn.Parameter(torch.zeros(self.inner_dim))
         self.gate = nn.Sequential(
             nn.Linear(self.query_dim, self.inner_dim, bias=True),
             nn.GELU(approximate="none"),

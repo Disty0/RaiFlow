@@ -7,12 +7,9 @@ from .raiflow_layers import RaiFlowConv1dForward, RaiFlowConv2dForward
 class RaiFlowLatentEmbedder(nn.Module):
     def __init__(self, patch_size: int, in_channels: int, base_seq_len: int, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1):
         super().__init__()
-
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.base_seq_len = base_seq_len
-        self.scale_latent = nn.Parameter(torch.ones((1, self.in_channels, 1, 1)))
-        self.shift_latent = nn.Parameter(torch.zeros((1, self.in_channels, 1, 1)))
         self.latent_embedder = RaiFlowConv2dForward(dim, dim_out, ff_mult=ff_mult, dropout=dropout)
 
     def forward(
@@ -45,7 +42,6 @@ class RaiFlowLatentEmbedder(nn.Module):
                 is_latent=True,
             )
 
-        hidden_states = torch.addcmul(self.shift_latent, hidden_states, self.scale_latent)
         hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
         hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.patch_size)
         hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
@@ -56,7 +52,6 @@ class RaiFlowLatentEmbedder(nn.Module):
 class RaiFlowTextEmbedder(nn.Module):
     def __init__(self, vocab_size: int, embedding_dim: int, pad_token_id: int, base_seq_len: int, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1):
         super().__init__()
-
         self.embedding_dim = embedding_dim
         self.base_seq_len = base_seq_len
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
@@ -92,10 +87,7 @@ class RaiFlowTextEmbedder(nn.Module):
 class RaiFlowLatentUnembedder(nn.Module):
     def __init__(self, patch_size: int, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1):
         super().__init__()
-
         self.patch_size = patch_size
-        self.scale_latent_out = nn.Parameter(torch.ones(dim_out))
-        self.shift_latent_out = nn.Parameter(torch.zeros(dim_out))
         self.norm_unembed = nn.RMSNorm(dim)
         self.unembedder = RaiFlowConv2dForward(dim, dim_out, ff_mult=ff_mult, dropout=dropout)
 
@@ -105,11 +97,7 @@ class RaiFlowLatentUnembedder(nn.Module):
         height: int,
         width: int
     ) -> torch.FloatTensor:
-        hidden_states = torch.addcmul(
-            self.shift_latent_out,
-            self.unembedder(self.norm_unembed(hidden_states), height//self.patch_size, width//self.patch_size),
-            self.scale_latent_out,
-        )
+        hidden_states = self.unembedder(self.norm_unembed(hidden_states), height//self.patch_size, width//self.patch_size)
         hidden_states = unpack_1d_latents_to_2d(
             hidden_states,
             patch_size=self.patch_size,
