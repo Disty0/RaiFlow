@@ -115,7 +115,7 @@ class RaiFlowAttnProcessor:
             key = torch.cat([encoder_key, key], dim=1)
             value = torch.cat([encoder_value, value], dim=1)
 
-        attn_output = dispatch_attention_fn(query, key, value).flatten(-2, -1).to(query.dtype)
+        attn_output = dispatch_attention_fn(query, key, value).flatten(-2, -1).to(dtype=query.dtype)
         attn_output = torch.addcmul(
             attn.bias,
             attn_output,
@@ -137,7 +137,7 @@ class RaiFlowAttnProcessor:
 class RaiFlowCrossAttnProcessor:
     def __call__(self, attn: "RaiFlowAttention", hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         query, key, value = _get_qkv_projections(attn, hidden_states, encoder_hidden_states)
-        attn_output = dispatch_attention_fn(query, key, value).flatten(-2, -1).to(query.dtype)
+        attn_output = dispatch_attention_fn(query, key, value).flatten(-2, -1).to(dtype=query.dtype)
         attn_output = torch.addcmul(attn.bias, attn_output, attn.gate(hidden_states))
         attn_output = attn.to_out(attn_output)
         return attn_output

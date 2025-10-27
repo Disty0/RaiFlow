@@ -17,7 +17,7 @@ from transformers import ImageProcessingMixin
 @torch.no_grad()
 def rgb_to_ycbcr_tensor(image: torch.ByteTensor) -> torch.FloatTensor:
     if image.dtype != torch.float32:
-        img = image.to(torch.float32).div_(255)
+        img = image.to(dtype=torch.float32).div_(255)
     else:
         img = image / 255
     y = (img[:,:,:,0] * 0.299).add_(img[:,:,:,1], alpha=0.587).add_(img[:,:,:,2], alpha=0.114)
@@ -37,7 +37,7 @@ def ycbcr_tensor_to_rgb(ycbcr: torch.FloatTensor) -> torch.ByteTensor:
     r = (cr * 1.402525).add_(y)
     g = (cb * -0.343730).add_(cr, alpha=-0.714401).add_(y)
     b = (cb * 1.769905).add_(cr, alpha=0.000013).add_(y)
-    rgb = torch.stack([r,g,b], dim=-1).mul_(255).round_().clamp_(0,255).to(torch.uint8)
+    rgb = torch.stack([r,g,b], dim=-1).mul_(255).round_().clamp_(0,255).to(dtype=torch.uint8)
     return rgb
 
 
@@ -48,7 +48,7 @@ def encode_single_channel_dct_2d(img: torch.FloatTensor, block_size: int=16, nor
     w_blocks = int(width//block_size)
 
     # batch_size, h_blocks, w_blocks, block_size_h, block_size_w
-    dct_tensor = img.view(batch_size, h_blocks, block_size, w_blocks, block_size).transpose(2,3).to(torch.float32)
+    dct_tensor = img.view(batch_size, h_blocks, block_size, w_blocks, block_size).transpose(2,3).to(dtype=torch.float32)
     dct_tensor = dct_2d(dct_tensor, norm=norm)
 
     # batch_size, combined_block_size, h_blocks, w_blocks
