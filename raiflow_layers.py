@@ -22,8 +22,8 @@ class RaiFlowFeedForward(nn.Module):
         return self.ff_out(
             torch.addcmul(
                 self.bias,
-                self.ff_gate(hidden_states),
                 self.ff_proj(hidden_states),
+                self.ff_gate(hidden_states),
             )
         )
 
@@ -47,8 +47,8 @@ class RaiFlowConv1dForward(nn.Module):
         return self.ff_out(
             torch.addcmul(
                 self.bias,
-                self.ff_gate(hidden_states.transpose(-1,-2)).transpose(-1,-2),
                 self.ff_proj(hidden_states),
+                self.ff_gate(hidden_states.transpose(-1,-2)).transpose(-1,-2),
             )
         )
 
@@ -72,7 +72,7 @@ class RaiFlowConv2dForward(nn.Module):
         return self.ff_out(
             torch.addcmul(
                 self.bias,
-                self.ff_gate(hidden_states.transpose(-1,-2).unflatten(-1, (height, width))).flatten(-2,-1).transpose(-1,-2),
                 self.ff_proj(hidden_states),
+                self.ff_gate(hidden_states.transpose(-1,-2).unflatten(-1, (height, width))).flatten(-2,-1).transpose(-1,-2),
             )
         )

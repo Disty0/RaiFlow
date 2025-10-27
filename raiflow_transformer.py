@@ -325,6 +325,16 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             dropout=dropout,
         )
 
+    def fuse_qkv_projections(self):
+        for module in self.modules():
+            if isinstance(module, RaiFlowAttention):
+                module.fuse_projections()
+
+    def unfuse_qkv_projections(self):
+        for module in self.modules():
+            if isinstance(module, RaiFlowAttention):
+                module.unfuse_projections()
+
     def forward(
         self,
         hidden_states: torch.FloatTensor,
