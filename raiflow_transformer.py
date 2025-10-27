@@ -216,10 +216,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     _supports_gradient_checkpointing = True
     _skip_layerwise_casting_patterns = [
         "latent_embedder", "unembedder", "text_embedder", "token_embedding",
-        "norm_unembed", "norm_ff", "norm_attn", "norm_attn_context", "norm",
-        "norm_cross_attn","norm_q", "norm_k", "norm_added_q", "norm_added_k",
-        "shift_latent", "shift_latent_out", "shift_in", "shift_out", "bias",
-        "scale_latent", "scale_latent_out", "scale_in", "scale_out",
+        "norm_q", "norm_k", "norm_added_q", "norm_added_k",
+        "norm_ff", "norm_attn", "norm_attn_context",
+        "bias", "norm",
     ]
 
     @register_to_config
