@@ -142,25 +142,8 @@ def RaiFlowPosEmbed2D(batch_size: int, height: int, width: int, device: torch.de
 
 
 def pack_2d_latents_to_1d(latents: torch.FloatTensor, patch_size: int) -> torch.FloatTensor:
-    batch_size, channels, height, width  = latents.shape
-    packed_latents = latents.view(batch_size, channels, (height // patch_size), patch_size, (width // patch_size), patch_size)
-    packed_latents = packed_latents.permute(0, 2, 4, 1, 3, 5)
-    packed_latents = packed_latents.reshape(batch_size, (height // patch_size) * (width // patch_size), (channels * patch_size * patch_size))
-    return packed_latents
+    return torch.nn.functional.pixel_unshuffle(latents, patch_size).flatten(-2,-1).transpose(-1,-2)
 
 
 def unpack_1d_latents_to_2d(latents: torch.FloatTensor, patch_size: int, original_height: int, original_width: int) -> torch.FloatTensor:
-        batch_size, _, channels = latents.shape
-
-        latents = latents.view(
-            batch_size,
-            (original_height // patch_size),
-            (original_width // patch_size),
-            (channels // (patch_size * patch_size)),
-            patch_size,
-            patch_size
-        )
-
-        latents = latents.permute(0, 3, 1, 4, 2, 5)
-        latents = latents.reshape(batch_size, (channels // (patch_size * patch_size)), original_height, original_width)
-        return latents
+    return torch.nn.functional.pixel_shuffle(latents.transpose(-1,-2).unflatten(-1, (original_height//patch_size, original_width//patch_size)), patch_size)
