@@ -514,6 +514,7 @@ class RaiFlowPipeline(DiffusionPipeline):
             sigmas=sigmas,
             **scheduler_kwargs,
         )
+        timesteps = timesteps.to(device, dtype=latents_dtype)
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
 
@@ -525,13 +526,11 @@ class RaiFlowPipeline(DiffusionPipeline):
 
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
-                # broadcast the sigmas to batch dimension
-                timestep = t.expand(latent_model_input.shape[0]).to(device, dtype=latents_dtype)
 
                 noise_pred, hidden_states, encoder_hidden_states = self.transformer(
                     hidden_states=latent_model_input,
                     encoder_hidden_states=prompt_embeds,
-                    timestep=timestep,
+                    timestep=t.expand(latent_model_input.shape[0]),
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     scale_timesteps=True,
                     return_dict=False,
@@ -544,7 +543,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                     noise_pred = noise_pred_uncond.lerp(noise_pred_text, self.guidance_scale)
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t.to(dtype=latents_dtype), latents, return_dict=False)[0]
+                latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
