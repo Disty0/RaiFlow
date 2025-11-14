@@ -8,29 +8,13 @@ from diffusers.loaders import PeftAdapterMixin
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
 
+from .raiflow_layers import RaiFlowFeedForward, RaiFlowRMSNorm
 from .raiflow_atten import RaiFlowAttention, RaiFlowAttnProcessor, RaiFlowCrossAttnProcessor
 from .raiflow_embedder import RaiFlowLatentEmbedder, RaiFlowTextEmbedder, RaiFlowLatentUnembedder
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
-
-
-class RaiFlowFeedForward(nn.Module):
-    def __init__(self, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1):
-        super().__init__()
-        inner_dim = int(max(dim, dim_out) * ff_mult)
-
-        self.ff_gate = nn.Sequential(
-            nn.Linear(dim, inner_dim, bias=True),
-            nn.GELU(approximate="none"),
-            nn.Dropout(dropout),
-        )
-
-        self.ff_proj = nn.Linear(dim, inner_dim, bias=True)
-        self.ff_out = nn.Linear(inner_dim, dim_out, bias=True)
-
-    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        return self.ff_out(self.ff_proj(hidden_states) * self.ff_gate(hidden_states))
+fp16_max = 65504
 
 
 class RaiFlowSingleTransformerBlock(nn.Module):
@@ -43,7 +27,7 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         attention_head_dim (`int`): The number of channels in each head.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the conv feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        eps (`float`, *optional*, defaults to 1e-05): The eps used with nn modules.
+        eps (`float`, *optional*, defaults to 1e-5): The eps used with nn modules.
     """
 
     def __init__(
@@ -53,11 +37,11 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         attention_head_dim: int,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        eps: float = 1e-05,
+        eps: float = 1e-5,
     ):
         super().__init__()
 
-        self.norm_attn = nn.RMSNorm(dim)
+        self.norm_attn = RaiFlowRMSNorm(dim, eps=eps)
         self.attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -65,18 +49,19 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             heads=num_attention_heads,
             head_dim=attention_head_dim,
             dropout=dropout,
+            eps=eps,
             processor=RaiFlowAttnProcessor(),
             is_joint_attention=False,
             is_cross_attention=False,
         )
 
-        self.norm_ff = nn.RMSNorm(dim)
+        self.norm_ff = RaiFlowRMSNorm(dim, eps=eps)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None)
-        hidden_states = hidden_states + self.ff(hidden_states=self.norm_ff(hidden_states))
-        return hidden_states
+        hidden_states = hidden_states + self.ff(self.norm_ff(hidden_states))
+        return hidden_states.clamp(-fp16_max, fp16_max)
 
 
 class RaiFlowJointTransformerBlock(nn.Module):
@@ -89,7 +74,7 @@ class RaiFlowJointTransformerBlock(nn.Module):
         attention_head_dim (`int`): The number of channels in each head.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the conv feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        eps (`float`, *optional*, defaults to 1e-05): The eps used with nn modules.
+        eps (`float`, *optional*, defaults to 1e-5): The eps used with nn modules.
     """
 
     def __init__(
@@ -99,12 +84,12 @@ class RaiFlowJointTransformerBlock(nn.Module):
         attention_head_dim: int,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        eps: float = 1e-05,
+        eps: float = 1e-5,
     ):
         super().__init__()
 
-        self.norm_attn = nn.RMSNorm(dim)
-        self.norm_attn_context = nn.RMSNorm(dim)
+        self.norm_attn = RaiFlowRMSNorm(dim, eps=eps)
+        self.norm_attn_context = RaiFlowRMSNorm(dim, eps=eps)
         self.attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -112,6 +97,7 @@ class RaiFlowJointTransformerBlock(nn.Module):
             heads=num_attention_heads,
             head_dim=attention_head_dim,
             dropout=dropout,
+            eps=eps,
             processor=RaiFlowAttnProcessor(),
             is_joint_attention=True,
             is_cross_attention=False,
@@ -136,7 +122,10 @@ class RaiFlowJointTransformerBlock(nn.Module):
         )
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        attn_output, context_attn_output = self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=self.norm_attn_context(encoder_hidden_states))
+        attn_output, context_attn_output = self.attn(
+            hidden_states=self.norm_attn(hidden_states),
+            encoder_hidden_states=self.norm_attn_context(encoder_hidden_states),
+        )
         hidden_states = hidden_states + attn_output
         encoder_hidden_states = encoder_hidden_states + context_attn_output
 
@@ -155,7 +144,7 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         attention_head_dim (`int`): The number of channels in each head.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the conv feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        eps (`float`, *optional*, defaults to 1e-05): The eps used with nn modules.
+        eps (`float`, *optional*, defaults to 1e-5): The eps used with nn modules.
     """
 
     def __init__(
@@ -165,11 +154,11 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         attention_head_dim: int,
         ff_mult: int = 2,
         dropout: float = 0.1,
-        eps: float = 1e-05,
+        eps: float = 1e-5,
     ):
         super().__init__()
 
-        self.norm_cross_attn = nn.RMSNorm(dim)
+        self.norm_cross_attn = RaiFlowRMSNorm(dim, eps=eps)
         self.cross_attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -177,12 +166,13 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             heads=num_attention_heads,
             head_dim=attention_head_dim,
             dropout=dropout,
+            eps=eps,
             processor=RaiFlowCrossAttnProcessor(),
             is_joint_attention=False,
             is_cross_attention=True,
         )
 
-        self.norm_attn = nn.RMSNorm(dim)
+        self.norm_attn = RaiFlowRMSNorm(dim, eps=eps)
         self.attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -190,19 +180,20 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             heads=num_attention_heads,
             head_dim=attention_head_dim,
             dropout=dropout,
+            eps=eps,
             processor=RaiFlowAttnProcessor(),
             is_joint_attention=False,
             is_cross_attention=False,
         )
 
-        self.norm_ff = nn.RMSNorm(dim)
+        self.norm_ff = RaiFlowRMSNorm(dim, eps=eps)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         hidden_states = hidden_states + self.cross_attn(hidden_states=self.norm_cross_attn(hidden_states), encoder_hidden_states=encoder_hidden_states)
         hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None)
-        hidden_states = hidden_states + self.ff(hidden_states=self.norm_ff(hidden_states))
-        return hidden_states
+        hidden_states = hidden_states + self.ff(self.norm_ff(hidden_states))
+        return hidden_states.clamp(-fp16_max, fp16_max)
 
 
 class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
@@ -227,15 +218,22 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             The size of each patch in the image. This parameter defines the resolution of patches fed into the model.
         ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
-        eps (`float`, *optional*, defaults to 1e-05): The eps used with nn modules.
+        eps (`float`, *optional*, defaults to 1e-5): The eps used with nn modules.
     """
 
     _supports_gradient_checkpointing = True
     _skip_layerwise_casting_patterns = [
         "latent_embedder", "unembedder", "text_embedder", "token_embedding",
+        "norm_latent_embedder", "norm_text_embedder", "norm_unembed", "norm_context",
+        "norm_ff", "norm_attn", "norm_attn_context", "norm_cross_attn",
         "norm_q", "norm_k", "norm_added_q", "norm_added_k",
-        "norm_ff", "norm_attn", "norm_attn_context",
         "bias", "norm",
+    ]
+    _keep_in_fp32_modules = [
+        "latent_embedder", "unembedder", "text_embedder_proj",
+        "norm_latent_embedder", "norm_text_embedder", "norm_unembed", "norm_context",
+        "norm_ff", "norm_attn", "norm_attn_context", "norm_cross_attn",
+        "norm_q", "norm_k", "norm_added_q", "norm_added_k", "norm",
     ]
 
     @register_to_config
@@ -258,7 +256,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         patch_size: int = 1,
         ff_mult: int = 4,
         dropout: float = 0.1,
-        eps: float = 1e-05,
+        eps: float = 1e-5,
     ):
         super().__init__()
         self.gradient_checkpointing = False
@@ -276,6 +274,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.base_seq_len,
             dim=self.patched_in_channels,
             dim_out=self.inner_dim,
+            eps=eps,
         )
 
         self.text_embedder = RaiFlowTextEmbedder(
@@ -285,6 +284,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.config.encoder_max_sequence_length,
             dim=self.encoder_in_channels, # dim + pos
             dim_out=self.inner_dim,
+            eps=eps,
         )
 
         self.joint_transformer_blocks = nn.ModuleList(
@@ -301,7 +301,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             ]
         )
 
-        self.norm_context = nn.RMSNorm(self.inner_dim)
+        self.norm_context = RaiFlowRMSNorm(self.inner_dim, eps=eps)
         self.cond_transformer_blocks = nn.ModuleList(
             [
                 RaiFlowConditionalTransformer2DBlock(
@@ -334,6 +334,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             patch_size=self.config.patch_size,
             dim=self.inner_dim,
             dim_out=self.out_channels,
+            eps=eps,
         )
 
     def fuse_qkv_projections(self):
@@ -451,7 +452,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 hidden_states, encoder_hidden_states = self._gradient_checkpointing_func(block, hidden_states, encoder_hidden_states)
             else:
                 hidden_states, encoder_hidden_states = block(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
-        hidden_states = hidden_states + residual
+        hidden_states = (hidden_states + residual).clamp(-fp16_max, fp16_max)
         encoder_hidden_states = self.norm_context(encoder_hidden_states)
 
         residual = hidden_states
@@ -460,7 +461,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 hidden_states = self._gradient_checkpointing_func(block, hidden_states, encoder_hidden_states)
             else:
                 hidden_states = block(hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
-        hidden_states = hidden_states + residual
+        hidden_states = (hidden_states + residual).clamp(-fp16_max, fp16_max)
 
         residual = hidden_states
         for index_block, block in enumerate(self.refiner_transformer_blocks):
@@ -468,7 +469,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 hidden_states = self._gradient_checkpointing_func(block, hidden_states)
             else:
                 hidden_states = block(hidden_states=hidden_states)
-        hidden_states = hidden_states + residual
+        hidden_states = (hidden_states + residual).clamp(-fp16_max, fp16_max)
 
         if use_checkpointing:
             output = self._gradient_checkpointing_func(self.unembedder, hidden_states, height, width)

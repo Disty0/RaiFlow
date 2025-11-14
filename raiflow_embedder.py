@@ -1,14 +1,17 @@
 import torch
 from torch import nn
 
+from .raiflow_layers import RaiFlowRMSNorm
+
 
 class RaiFlowLatentEmbedder(nn.Module):
-    def __init__(self, patch_size: int, in_channels: int, base_seq_len: int, dim: int, dim_out: int):
+    def __init__(self, patch_size: int, in_channels: int, base_seq_len: int, dim: int, dim_out: int, eps: float = 1e-5):
         super().__init__()
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.base_seq_len = base_seq_len
-        self.latent_embedder = nn.Linear(dim, dim_out)
+        self.latent_embedder_proj = nn.Linear(dim, dim_out)
+        self.norm_latent_embedder = RaiFlowRMSNorm(dim_out, eps=eps)
 
     def forward(
         self,
@@ -27,33 +30,34 @@ class RaiFlowLatentEmbedder(nn.Module):
                 height=height,
                 width=width,
                 device=hidden_states.device,
-                dtype=dtype,
+                dtype=torch.float32,
             )
             posed_latents_1d = RaiFlowPosEmbed1D(
                 batch_size=batch_size,
                 seq_len=latents_seq_len,
                 device=hidden_states.device,
-                dtype=dtype,
+                dtype=torch.float32,
                 secondary_seq_len=encoder_seq_len,
                 base_seq_len=self.base_seq_len,
                 timestep=timestep,
                 is_latent=True,
             )
 
-        hidden_states = torch.cat([hidden_states, posed_latents_2d], dim=1)
+        hidden_states = torch.cat([hidden_states.to(dtype=torch.float32), posed_latents_2d], dim=1)
         hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.patch_size)
         hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
-        hidden_states = self.latent_embedder(hidden_states)
-        return hidden_states
+        hidden_states = self.norm_latent_embedder(self.latent_embedder_proj(hidden_states))
+        return hidden_states.to(dtype=dtype)
 
 
 class RaiFlowTextEmbedder(nn.Module):
-    def __init__(self, vocab_size: int, embedding_dim: int, pad_token_id: int, base_seq_len: int, dim: int, dim_out: int):
+    def __init__(self, vocab_size: int, embedding_dim: int, pad_token_id: int, base_seq_len: int, dim: int, dim_out: int, eps: float = 1e-5):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.base_seq_len = base_seq_len
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
-        self.text_embedder = nn.Linear(dim, dim_out)
+        self.text_embedder_proj = nn.Linear(dim, dim_out)
+        self.norm_text_embedder = RaiFlowRMSNorm(dim_out, eps=eps)
 
     def forward(
         self,
@@ -69,25 +73,25 @@ class RaiFlowTextEmbedder(nn.Module):
                 batch_size=batch_size,
                 seq_len=encoder_seq_len,
                 device=encoder_hidden_states.device,
-                dtype=dtype,
+                dtype=torch.float32,
                 secondary_seq_len=latents_seq_len,
                 base_seq_len=self.base_seq_len,
                 timestep=timestep,
                 is_latent=True,
             )
 
-        encoder_hidden_states = self.token_embedding(encoder_hidden_states)
+        encoder_hidden_states = self.token_embedding(encoder_hidden_states).to(dtype=torch.float32)
         encoder_hidden_states = torch.cat([encoder_hidden_states, posed_encoder_1d], dim=2)
-        encoder_hidden_states = self.text_embedder(encoder_hidden_states)
-        return encoder_hidden_states
+        encoder_hidden_states = self.norm_text_embedder(self.text_embedder_proj(encoder_hidden_states))
+        return encoder_hidden_states.to(dtype=dtype)
 
 
 class RaiFlowLatentUnembedder(nn.Module):
-    def __init__(self, patch_size: int, dim: int, dim_out: int):
+    def __init__(self, patch_size: int, dim: int, dim_out: int, eps: float = 1e-5):
         super().__init__()
         self.patch_size = patch_size
-        self.norm_unembed = nn.RMSNorm(dim)
-        self.unembedder = nn.Linear(dim, dim_out)
+        self.norm_unembed = RaiFlowRMSNorm(dim, eps=eps)
+        self.unembedder_proj = nn.Linear(dim, dim_out)
 
     def forward(
         self,
@@ -95,7 +99,7 @@ class RaiFlowLatentUnembedder(nn.Module):
         height: int,
         width: int
     ) -> torch.FloatTensor:
-        hidden_states = self.unembedder(self.norm_unembed(hidden_states))
+        hidden_states = self.unembedder_proj(self.norm_unembed(hidden_states.to(dtype=torch.float32)))
         hidden_states = unpack_1d_latents_to_2d(
             hidden_states,
             patch_size=self.patch_size,

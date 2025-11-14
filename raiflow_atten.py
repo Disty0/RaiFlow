@@ -3,6 +3,8 @@ from typing import Optional, Union
 import torch
 from torch import nn
 
+from .raiflow_layers import RaiFlowRMSNorm
+
 
 def dispatch_attention_fn(
     query: torch.FloatTensor,
@@ -150,6 +152,7 @@ class RaiFlowAttention(torch.nn.Module):
         heads: int = 12,
         head_dim: int = 128,
         dropout: float = 0.1,
+        eps: float = 1e-5,
         is_joint_attention: bool = False,
         is_cross_attention: bool = False,
         processor: Optional[Union["RaiFlowAttnProcessor", "RaiFlowCrossAttnProcessor"]] = None,
@@ -175,8 +178,8 @@ class RaiFlowAttention(torch.nn.Module):
         )
 
         self.to_out = nn.Linear(self.inner_dim, self.out_dim, bias=True)
-        self.norm_q = nn.RMSNorm(self.head_dim)
-        self.norm_k = nn.RMSNorm(self.head_dim)
+        self.norm_q = RaiFlowRMSNorm(self.head_dim, eps=eps)
+        self.norm_k = RaiFlowRMSNorm(self.head_dim, eps=eps)
 
         self.to_q = nn.Linear(self.query_dim, self.inner_dim, bias=True)
         self.to_k = nn.Linear(self.query_dim, self.inner_dim, bias=True)
@@ -186,8 +189,8 @@ class RaiFlowAttention(torch.nn.Module):
             self.to_added_q = nn.Linear(self.query_dim, self.inner_dim, bias=True)
             self.to_added_k = nn.Linear(self.query_dim, self.inner_dim, bias=True)
             self.to_added_v = nn.Linear(self.query_dim, self.inner_dim, bias=True)
-            self.norm_added_q = nn.RMSNorm(self.head_dim)
-            self.norm_added_k = nn.RMSNorm(self.head_dim)
+            self.norm_added_q = RaiFlowRMSNorm(self.head_dim, eps=eps)
+            self.norm_added_k = RaiFlowRMSNorm(self.head_dim, eps=eps)
             self.to_add_out = nn.Linear(self.inner_dim, self.out_context_dim, bias=True)
 
     @torch.no_grad()

@@ -1,0 +1,33 @@
+import torch
+from torch import nn
+from torch.nn import functional as F
+
+fp16_max = 65504
+
+
+class RaiFlowRMSNorm(nn.RMSNorm):
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        return F.rms_norm(
+            hidden_states.clamp(-fp16_max, fp16_max).to(dtype=torch.float32),
+            self.normalized_shape,
+            self.weight,
+            self.eps,
+        ).to(dtype=hidden_states.dtype)
+
+
+class RaiFlowFeedForward(nn.Module):
+    def __init__(self, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1):
+        super().__init__()
+        inner_dim = int(max(dim, dim_out) * ff_mult)
+
+        self.ff_gate = nn.Sequential(
+            nn.Linear(dim, inner_dim, bias=True),
+            nn.GELU(approximate="none"),
+            nn.Dropout(dropout),
+        )
+
+        self.ff_proj = nn.Linear(dim, inner_dim, bias=True)
+        self.ff_out = nn.Linear(inner_dim, dim_out, bias=True)
+
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        return self.ff_out(self.ff_proj(hidden_states) * self.ff_gate(hidden_states))
