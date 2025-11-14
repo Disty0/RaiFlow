@@ -353,6 +353,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         encoder_hidden_states: torch.Tensor,
         timestep: torch.FloatTensor,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+        scale_timesteps: bool = True,
         return_dict: bool = True,
     ) -> Union[RaiFlowTransformer2DModelOutput, Tuple[torch.FloatTensor]]:
         """
@@ -400,7 +401,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         latents_seq_len = (height // self.config.patch_size) * (width // self.config.patch_size)
 
         with torch.no_grad():
-            timestep = timestep.view(batch_size, 1, 1)
+            timestep = timestep.view(batch_size, 1, 1).to(dtype=torch.float32)
+            if scale_timesteps:
+                timestep = timestep / self.num_train_timesteps
 
         if use_checkpointing:
             encoder_hidden_states = self._gradient_checkpointing_func(

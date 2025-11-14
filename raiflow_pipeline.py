@@ -525,15 +525,15 @@ class RaiFlowPipeline(DiffusionPipeline):
 
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
-                latent_model_input = latent_model_input.to(dtype=dtype)
                 # broadcast the sigmas to batch dimension
-                timesteps = self.scheduler.sigmas[self.scheduler.step_index or i].to(device, dtype=dtype).expand(latent_model_input.shape[0])
+                timestep = t.expand(latent_model_input.shape[0]).to(device, dtype=latents_dtype)
 
                 noise_pred, hidden_states, encoder_hidden_states = self.transformer(
                     hidden_states=latent_model_input,
                     encoder_hidden_states=prompt_embeds,
-                    timestep=timesteps,
+                    timestep=timestep,
                     joint_attention_kwargs=self.joint_attention_kwargs,
+                    scale_timesteps=True,
                     return_dict=False,
                 )
                 noise_pred = noise_pred.to(dtype=latents_dtype)
@@ -541,31 +541,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                 # perform guidances
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = (noise_pred_text * self.guidance_scale) - (noise_pred_uncond * (self.guidance_scale - 1))
-                    #noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-                    """
-                    if t == self.scheduler.config.num_train_timesteps and self.raiflow_guidence_base_shift > 0:
-                        # downscale cfg at the first step to fix everything becoming black issue
-                        downscaled_guidance_scale = (self.guidance_scale / 2) / (self.raiflow_guidence_base_shift / self.scheduler.shift)
-                    else:
-                        # halve the cfg scale because we are using double cfg
-                        downscaled_guidance_scale = self.guidance_scale / 2
-
-                    if downscaled_guidance_scale > 1:
-                        noise_pred_text_cfg = (noise_pred_text * downscaled_guidance_scale) - (noise_pred_uncond * (downscaled_guidance_scale - 1))
-                        noise_pred_uncond_cfg = (noise_pred_uncond * downscaled_guidance_scale) - (noise_pred_text * (downscaled_guidance_scale - 1))
-                        x0_pred_guidance_scale = self.raiflow_x0_pred_guidance_scale
-                    else:
-                        noise_pred_text_cfg = noise_pred_text
-                        noise_pred_uncond_cfg = noise_pred_uncond
-                        x0_pred_guidance_scale = self.raiflow_x0_pred_guidance_scale + downscaled_guidance_scale
-
-                    x0_pred_text = latents - (noise_pred_text_cfg * timesteps)
-                    x0_pred_uncond = latents - (noise_pred_uncond_cfg * timesteps)
-
-                    noise_pred = noise_pred_text_cfg - x0_pred_guidance_scale * ((x0_pred_text - x0_pred_uncond) * timesteps)
-                    """
+                    noise_pred = noise_pred_uncond.lerp(noise_pred_text, self.guidance_scale)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 latents = self.scheduler.step(noise_pred, t.to(dtype=latents_dtype), latents, return_dict=False)[0]
