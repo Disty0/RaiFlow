@@ -535,7 +535,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                     scale_timesteps=True,
                     return_dict=False,
                 )
-                noise_pred = noise_pred.to(dtype=latents_dtype)
+                assert noise_pred.dtype == torch.float32
 
                 # perform guidances
                 if self.do_classifier_free_guidance:
