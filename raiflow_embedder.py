@@ -10,7 +10,7 @@ class RaiFlowLatentEmbedder(nn.Module):
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.base_seq_len = base_seq_len
-        self.latent_embedder_proj = nn.Linear(dim, dim_out)
+        self.latent_embedder_proj = nn.Conv2d(dim, dim_out, 3, padding=1)
         self.norm_latent_embedder = RaiFlowRMSNorm(dim_out, eps=eps)
 
     def forward(
@@ -41,13 +41,14 @@ class RaiFlowLatentEmbedder(nn.Module):
                 base_seq_len=self.base_seq_len,
                 timestep=timestep,
                 is_latent=True,
-            )
+            ).transpose(-1,-2).unflatten(-1, (height//self.patch_size, width//self.patch_size))
 
         hidden_states = torch.cat([hidden_states.to(dtype=torch.float32), posed_latents_2d], dim=1)
-        hidden_states = pack_2d_latents_to_1d(hidden_states, patch_size=self.patch_size)
-        hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=2)
-        hidden_states = self.norm_latent_embedder(self.latent_embedder_proj(hidden_states))
-        return hidden_states.to(dtype=dtype)
+        hidden_states = torch.nn.functional.pixel_unshuffle(hidden_states, self.patch_size)
+        hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=-3)
+        hidden_states = self.latent_embedder_proj(hidden_states).flatten(-2,-1).transpose(-1,-2)
+        hidden_states = self.norm_latent_embedder(hidden_states).to(dtype=dtype, memory_format=torch.contiguous_format)
+        return hidden_states
 
 
 class RaiFlowTextEmbedder(nn.Module):
@@ -56,7 +57,7 @@ class RaiFlowTextEmbedder(nn.Module):
         self.embedding_dim = embedding_dim
         self.base_seq_len = base_seq_len
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
-        self.text_embedder_proj = nn.Linear(dim, dim_out)
+        self.text_embedder_proj = nn.Conv1d(dim, dim_out, 3, padding=1)
         self.norm_text_embedder = RaiFlowRMSNorm(dim_out, eps=eps)
 
     def forward(
@@ -82,8 +83,9 @@ class RaiFlowTextEmbedder(nn.Module):
 
         encoder_hidden_states = self.token_embedding(encoder_hidden_states).to(dtype=torch.float32)
         encoder_hidden_states = torch.cat([encoder_hidden_states, posed_encoder_1d], dim=2)
-        encoder_hidden_states = self.norm_text_embedder(self.text_embedder_proj(encoder_hidden_states))
-        return encoder_hidden_states.to(dtype=dtype)
+        encoder_hidden_states = self.text_embedder_proj(encoder_hidden_states.transpose(-1,-2)).transpose(-1,-2)
+        encoder_hidden_states = self.norm_text_embedder(encoder_hidden_states).to(dtype=dtype, memory_format=torch.contiguous_format)
+        return encoder_hidden_states
 
 
 class RaiFlowLatentUnembedder(nn.Module):
@@ -91,21 +93,17 @@ class RaiFlowLatentUnembedder(nn.Module):
         super().__init__()
         self.patch_size = patch_size
         self.norm_unembed = RaiFlowRMSNorm(dim, eps=eps)
-        self.unembedder_proj = nn.Linear(dim, dim_out)
+        self.unembedder_proj = nn.Conv2d(dim, dim_out, 3, padding=1)
 
     def forward(
         self,
         hidden_states: torch.FloatTensor,
         height: int,
-        width: int
+        width: int,
     ) -> torch.FloatTensor:
-        hidden_states = self.unembedder_proj(self.norm_unembed(hidden_states.to(dtype=torch.float32)))
-        hidden_states = unpack_1d_latents_to_2d(
-            hidden_states,
-            patch_size=self.patch_size,
-            original_height=height,
-            original_width=width,
-        )
+        hidden_states = self.norm_unembed(hidden_states.to(dtype=torch.float32))
+        hidden_states = hidden_states.transpose(-1,-2).unflatten(-1, (height//self.patch_size, width//self.patch_size))
+        hidden_states = torch.nn.functional.pixel_shuffle(self.unembedder_proj(hidden_states), self.patch_size)
         return hidden_states
 
 
@@ -141,11 +139,3 @@ def RaiFlowPosEmbed2D(batch_size: int, height: int, width: int, device: torch.de
     posed_latents = torch.stack([posed_latents_ch0, posed_latents_ch1, posed_latents_ch2, posed_latents_ch3], dim=0) # (4, height, width)
     posed_latents = posed_latents.unsqueeze(0).repeat(batch_size, 1, 1, 1) # (batch_size, 4, height, width)
     return posed_latents
-
-
-def pack_2d_latents_to_1d(latents: torch.FloatTensor, patch_size: int) -> torch.FloatTensor:
-    return torch.nn.functional.pixel_unshuffle(latents, patch_size).flatten(-2,-1).transpose(-1,-2)
-
-
-def unpack_1d_latents_to_2d(latents: torch.FloatTensor, patch_size: int, original_height: int, original_width: int) -> torch.FloatTensor:
-    return torch.nn.functional.pixel_shuffle(latents.transpose(-1,-2).unflatten(-1, (original_height//patch_size, original_width//patch_size)), patch_size)
