@@ -24,31 +24,32 @@ class RaiFlowLatentEmbedder(nn.Module):
         height: int,
         width: int,
     ) -> torch.FloatTensor:
-        with torch.no_grad():
-            posed_latents_2d = RaiFlowPosEmbed2D(
-                batch_size=batch_size,
-                height=height,
-                width=width,
-                device=hidden_states.device,
-                dtype=torch.float32,
-            )
-            posed_latents_1d = RaiFlowPosEmbed1D(
-                batch_size=batch_size,
-                seq_len=latents_seq_len,
-                device=hidden_states.device,
-                dtype=torch.float32,
-                secondary_seq_len=encoder_seq_len,
-                base_seq_len=self.base_seq_len,
-                timestep=timestep,
-                is_latent=True,
-            ).transpose(-1,-2).unflatten(-1, (height//self.patch_size, width//self.patch_size))
+        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+            with torch.no_grad():
+                posed_latents_2d = RaiFlowPosEmbed2D(
+                    batch_size=batch_size,
+                    height=height,
+                    width=width,
+                    device=hidden_states.device,
+                    dtype=torch.float32,
+                )
+                posed_latents_1d = RaiFlowPosEmbed1D(
+                    batch_size=batch_size,
+                    seq_len=latents_seq_len,
+                    device=hidden_states.device,
+                    dtype=torch.float32,
+                    secondary_seq_len=encoder_seq_len,
+                    base_seq_len=self.base_seq_len,
+                    timestep=timestep,
+                    is_latent=True,
+                ).transpose(-1,-2).unflatten(-1, (height//self.patch_size, width//self.patch_size))
 
-        hidden_states = torch.cat([hidden_states.to(dtype=torch.float32), posed_latents_2d], dim=1)
-        hidden_states = torch.nn.functional.pixel_unshuffle(hidden_states, self.patch_size)
-        hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=-3)
-        hidden_states = self.latent_embedder_proj(hidden_states).flatten(-2,-1).transpose(-1,-2)
-        hidden_states = self.norm_latent_embedder(hidden_states).to(dtype=dtype, memory_format=torch.contiguous_format)
-        return hidden_states
+            hidden_states = torch.cat([hidden_states.to(dtype=torch.float32), posed_latents_2d], dim=1)
+            hidden_states = torch.nn.functional.pixel_unshuffle(hidden_states, self.patch_size)
+            hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=-3)
+            hidden_states = self.latent_embedder_proj(hidden_states).flatten(-2,-1).transpose(-1,-2)
+            hidden_states = self.norm_latent_embedder(hidden_states).to(dtype=dtype, memory_format=torch.contiguous_format)
+            return hidden_states
 
 
 class RaiFlowTextEmbedder(nn.Module):
@@ -69,23 +70,24 @@ class RaiFlowTextEmbedder(nn.Module):
         encoder_seq_len: int,
         batch_size: int,
     ) -> torch.FloatTensor:
-        with torch.no_grad():
-            posed_encoder_1d = RaiFlowPosEmbed1D(
-                batch_size=batch_size,
-                seq_len=encoder_seq_len,
-                device=encoder_hidden_states.device,
-                dtype=torch.float32,
-                secondary_seq_len=latents_seq_len,
-                base_seq_len=self.base_seq_len,
-                timestep=timestep,
-                is_latent=True,
-            )
-
         encoder_hidden_states = self.token_embedding(encoder_hidden_states).to(dtype=torch.float32)
-        encoder_hidden_states = torch.cat([encoder_hidden_states, posed_encoder_1d], dim=2)
-        encoder_hidden_states = self.text_embedder_proj(encoder_hidden_states.transpose(-1,-2)).transpose(-1,-2)
-        encoder_hidden_states = self.norm_text_embedder(encoder_hidden_states).to(dtype=dtype, memory_format=torch.contiguous_format)
-        return encoder_hidden_states
+        with torch.autocast(device_type=encoder_hidden_states.device.type, enabled=False):
+            with torch.no_grad():
+                posed_encoder_1d = RaiFlowPosEmbed1D(
+                    batch_size=batch_size,
+                    seq_len=encoder_seq_len,
+                    device=encoder_hidden_states.device,
+                    dtype=torch.float32,
+                    secondary_seq_len=latents_seq_len,
+                    base_seq_len=self.base_seq_len,
+                    timestep=timestep,
+                    is_latent=True,
+                )
+
+            encoder_hidden_states = torch.cat([encoder_hidden_states, posed_encoder_1d], dim=2)
+            encoder_hidden_states = self.text_embedder_proj(encoder_hidden_states.transpose(-1,-2)).transpose(-1,-2)
+            encoder_hidden_states = self.norm_text_embedder(encoder_hidden_states).to(dtype=dtype, memory_format=torch.contiguous_format)
+            return encoder_hidden_states
 
 
 class RaiFlowLatentUnembedder(nn.Module):
@@ -101,10 +103,11 @@ class RaiFlowLatentUnembedder(nn.Module):
         height: int,
         width: int,
     ) -> torch.FloatTensor:
-        hidden_states = self.norm_unembed(hidden_states.to(dtype=torch.float32))
-        hidden_states = hidden_states.transpose(-1,-2).unflatten(-1, (height//self.patch_size, width//self.patch_size))
-        hidden_states = torch.nn.functional.pixel_shuffle(self.unembedder_proj(hidden_states), self.patch_size)
-        return hidden_states
+        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+            hidden_states = self.norm_unembed(hidden_states.to(dtype=torch.float32))
+            hidden_states = hidden_states.transpose(-1,-2).unflatten(-1, (height//self.patch_size, width//self.patch_size))
+            hidden_states = torch.nn.functional.pixel_shuffle(self.unembedder_proj(hidden_states), self.patch_size)
+            return hidden_states
 
 
 def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, device: torch.device, dtype: torch.dtype, secondary_seq_len: int, base_seq_len: int, timestep: torch.FloatTensor, is_latent: bool) -> torch.FloatTensor:
