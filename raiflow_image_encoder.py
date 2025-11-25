@@ -17,7 +17,7 @@ from transformers import ImageProcessingMixin
 @torch.no_grad()
 def rgb_to_ycbcr_tensor(image: torch.ByteTensor) -> torch.FloatTensor:
     rgb_weights = torch.tensor([[0.002345098, -0.001323419, 0.003921569], [0.004603922, -0.00259815, -0.003283824], [0.000894118, 0.003921569, -0.000637744]], device=image.device)
-    ycbcr = torch.einsum("cv,...chw->...vhw", [rgb_weights, image.to(dtype=torch.float32).permute(0,3,1,2)])
+    ycbcr = torch.einsum("cv,...chw->...vhw", [rgb_weights, image.permute(0,3,1,2).to(dtype=torch.float32)])
     ycbcr[:,0,:,:].add_(-1)
     return ycbcr
 
@@ -209,7 +209,7 @@ def dct(x, norm=None):
     v = torch.cat([x[:, ::2], x[:, 1::2].flip([1])], dim=1)
     Vc = torch.view_as_real(torch.fft.fft(v, dim=1))
 
-    k = - torch.arange(N, dtype=x.dtype, device=x.device)[None, :].mul_(math.pi / (2 * N))
+    k = - torch.arange(N, dtype=x.dtype, device=x.device).unsqueeze(0).mul_(math.pi / (2 * N))
     V = torch.mul(Vc[:, :, 0], torch.cos(k)).addcmul_(Vc[:, :, 1], -torch.sin(k))
 
     if norm == "ortho":
@@ -230,7 +230,7 @@ def idct(X, norm=None):
         X_v[:, 0].mul_(math.sqrt(N) * 2)
         X_v[:, 1:].mul_(math.sqrt(N / 2) * 2)
 
-    k = torch.arange(N, dtype=X.dtype, device=X.device)[None, :].mul_(math.pi / (2 * N))
+    k = torch.arange(N, dtype=X.dtype, device=X.device).unsqueeze(0).mul_(math.pi / (2 * N))
     W_r = torch.cos(k)
     W_i = torch.sin(k)
 
