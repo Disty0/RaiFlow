@@ -307,14 +307,6 @@ class RaiFlowPipeline(DiffusionPipeline):
     def guidance_scale(self):
         return self._guidance_scale
 
-    @property
-    def raiflow_x0_pred_guidance_scale(self):
-        return self._raiflow_x0_pred_guidance_scale
-
-    @property
-    def raiflow_guidence_base_shift(self):
-        return self._raiflow_guidence_base_shift
-
     # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
     # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
     # corresponds to doing no classifier free guidance.
@@ -344,8 +336,6 @@ class RaiFlowPipeline(DiffusionPipeline):
         num_inference_steps: int = 30,
         sigmas: Optional[List[float]] = None,
         guidance_scale: float = 3.5,
-        raiflow_x0_pred_guidance_scale: float = 1.0,
-        raiflow_guidence_base_shift: float = 4.0,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: Optional[int] = 1,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
@@ -382,10 +372,6 @@ class RaiFlowPipeline(DiffusionPipeline):
                 Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
                 1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
                 usually at the expense of lower image quality.
-            raiflow_x0_pred_guidance_scale (`float`, *optional*, defaults to 1.0):
-                Guidance scale used for classifier free guidence via the final image predictions.
-            raiflow_guidence_base_shift (`float`, *optional*, defaults to 4.0):
-                Base shift used to scale the cfg value on the first timestep.
             negative_prompt (`str` or `List[str]`, *optional*):
                 The prompt or prompts not to guide the image generation.
                 Ignored when not using guidance (i.e., ignored if `guidance_scale` is less than `1`).
@@ -446,9 +432,6 @@ class RaiFlowPipeline(DiffusionPipeline):
         )
 
         self._guidance_scale = guidance_scale
-        self._raiflow_guidence_base_shift = raiflow_guidence_base_shift
-        self._raiflow_x0_pred_guidance_scale = raiflow_x0_pred_guidance_scale
-
         self._joint_attention_kwargs = joint_attention_kwargs
         self._interrupt = False
 
