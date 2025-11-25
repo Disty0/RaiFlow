@@ -21,6 +21,7 @@ class RaiFlowPipelineOutput(BaseOutput):
     """
 
     images: Union[List[PIL.Image.Image], np.ndarray]  # noqa: F821
+    x0_pred: "torch.FloatTensor"  # noqa: F821
     hidden_states: "torch.FloatTensor"  # noqa: F821
     encoder_hidden_states: "torch.FloatTensor"  # noqa: F821
 
@@ -39,5 +40,6 @@ class RaiFlowTransformer2DModelOutput(BaseOutput):
     """
 
     sample: "torch.FloatTensor"  # noqa: F821
+    x0_pred: "torch.FloatTensor"  # noqa: F821
     hidden_states: "torch.FloatTensor"  # noqa: F821
     encoder_hidden_states: "torch.FloatTensor"  # noqa: F821

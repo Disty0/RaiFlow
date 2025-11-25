@@ -400,10 +400,18 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         _, encoder_seq_len = encoder_hidden_states.shape
         latents_seq_len = (height // self.config.patch_size) * (width // self.config.patch_size)
 
+        assert hidden_states.dtype == torch.float32, "hidden_states should be in float32"
+        noisy_model_input = hidden_states
+
         with torch.no_grad():
+            if  not scale_timesteps:
+                assert timestep.dtype == torch.float32, "timestep sigmas should be in float32"
             timestep = timestep.view(batch_size, 1, 1).to(dtype=torch.float32)
             if scale_timesteps:
                 timestep = timestep / self.config.num_train_timesteps
+            else:
+                timestep_max, timestep_min = timestep.max(), timestep.min()
+                assert timestep_max <= 1 and timestep_min >= 0, f"timesteps sigmas range should be between 1 and zero but got {timestep_max} and {timestep_min}"
 
         if use_checkpointing:
             encoder_hidden_states = self._gradient_checkpointing_func(
@@ -475,15 +483,20 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         hidden_states = (hidden_states + residual).clamp(-fp16_max, fp16_max)
 
         if use_checkpointing:
-            output = self._gradient_checkpointing_func(self.unembedder, hidden_states, height, width)
+            x0_pred = self._gradient_checkpointing_func(self.unembedder, hidden_states, height, width)
         else:
-            output = self.unembedder(hidden_states, height=height, width=width)
+            x0_pred = self.unembedder(hidden_states, height=height, width=width)
+
+        # multiply your flow target and model_pred with sigmas * (torch.pi/2) to prevent training loss from exploding
+        # using x0_pred target instead of flow target for training doesn't have this issue
+        assert noisy_model_input.dtype == torch.float32 and x0_pred.dtype == torch.float32 and timestep.dtype == torch.float32, "model outputs and inputs should be in float32"
+        output = (noisy_model_input - x0_pred) / timestep.view(batch_size, 1, 1, 1)
 
         if USE_PEFT_BACKEND:
             # remove `lora_scale` from each PEFT layer
             unscale_lora_layers(self, lora_scale)
 
         if not return_dict:
-            return (output, hidden_states, encoder_hidden_states)
+            return (output, x0_pred, hidden_states, encoder_hidden_states)
 
-        return RaiFlowTransformer2DModelOutput(sample=output, hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
+        return RaiFlowTransformer2DModelOutput(sample=output, x0_pred=x0_pred, hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
