@@ -38,10 +38,14 @@ class RaiFlowSingleTransformerBlock(nn.Module):
         ff_mult: int = 4,
         dropout: float = 0.1,
         eps: float = 1e-5,
+        bias: bool = False,
+        elementwise_affine: bool = False,
     ):
         super().__init__()
 
-        self.norm_attn = RaiFlowRMSNorm(dim, eps=eps)
+        self.norm = RaiFlowRMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout, bias=bias)
+
         self.attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -50,17 +54,17 @@ class RaiFlowSingleTransformerBlock(nn.Module):
             head_dim=attention_head_dim,
             dropout=dropout,
             eps=eps,
+            bias=bias,
+            elementwise_affine=elementwise_affine,
             processor=RaiFlowAttnProcessor(),
             is_joint_attention=False,
             is_cross_attention=False,
         )
 
-        self.norm_ff = RaiFlowRMSNorm(dim, eps=eps)
-        self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
-
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None)
-        hidden_states = hidden_states + self.ff(self.norm_ff(hidden_states))
+        norm_hidden_states = self.norm(hidden_states)
+        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None)
+        hidden_states = hidden_states + self.ff(norm_hidden_states)
         return hidden_states.clamp(-fp16_max, fp16_max)
 
 
@@ -85,11 +89,13 @@ class RaiFlowJointTransformerBlock(nn.Module):
         ff_mult: int = 4,
         dropout: float = 0.1,
         eps: float = 1e-5,
+        bias: bool = False,
+        elementwise_affine: bool = False,
     ):
         super().__init__()
 
-        self.norm_attn = RaiFlowRMSNorm(dim, eps=eps)
-        self.norm_attn_context = RaiFlowRMSNorm(dim, eps=eps)
+        self.norm_attn = RaiFlowRMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm_attn_context = RaiFlowRMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
         self.attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -98,6 +104,8 @@ class RaiFlowJointTransformerBlock(nn.Module):
             head_dim=attention_head_dim,
             dropout=dropout,
             eps=eps,
+            bias=bias,
+            elementwise_affine=elementwise_affine,
             processor=RaiFlowAttnProcessor(),
             is_joint_attention=True,
             is_cross_attention=False,
@@ -110,6 +118,8 @@ class RaiFlowJointTransformerBlock(nn.Module):
             ff_mult=ff_mult,
             dropout=dropout,
             eps=eps,
+            bias=bias,
+            elementwise_affine=elementwise_affine,
         )
 
         self.latent_transformer = RaiFlowSingleTransformerBlock(
@@ -119,6 +129,8 @@ class RaiFlowJointTransformerBlock(nn.Module):
             ff_mult=ff_mult,
             dropout=dropout,
             eps=eps,
+            bias=bias,
+            elementwise_affine=elementwise_affine,
         )
 
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
@@ -155,10 +167,14 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
         ff_mult: int = 2,
         dropout: float = 0.1,
         eps: float = 1e-5,
+        bias: bool = False,
+        elementwise_affine: bool = False,
     ):
         super().__init__()
 
-        self.norm_cross_attn = RaiFlowRMSNorm(dim, eps=eps)
+        self.norm = RaiFlowRMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout, bias=bias)
+
         self.cross_attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -167,12 +183,13 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             head_dim=attention_head_dim,
             dropout=dropout,
             eps=eps,
+            bias=bias,
+            elementwise_affine=elementwise_affine,
             processor=RaiFlowCrossAttnProcessor(),
             is_joint_attention=False,
             is_cross_attention=True,
         )
 
-        self.norm_attn = RaiFlowRMSNorm(dim, eps=eps)
         self.attn = RaiFlowAttention(
             query_dim=dim,
             out_dim=dim,
@@ -181,18 +198,18 @@ class RaiFlowConditionalTransformer2DBlock(nn.Module):
             head_dim=attention_head_dim,
             dropout=dropout,
             eps=eps,
+            bias=bias,
+            elementwise_affine=elementwise_affine,
             processor=RaiFlowAttnProcessor(),
             is_joint_attention=False,
             is_cross_attention=False,
         )
 
-        self.norm_ff = RaiFlowRMSNorm(dim, eps=eps)
-        self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout)
-
     def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        hidden_states = hidden_states + self.cross_attn(hidden_states=self.norm_cross_attn(hidden_states), encoder_hidden_states=encoder_hidden_states)
-        hidden_states = hidden_states + self.attn(hidden_states=self.norm_attn(hidden_states), encoder_hidden_states=None)
-        hidden_states = hidden_states + self.ff(self.norm_ff(hidden_states))
+        norm_hidden_states = self.norm(hidden_states)
+        hidden_states = hidden_states + self.cross_attn(hidden_states=norm_hidden_states, encoder_hidden_states=encoder_hidden_states)
+        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states, encoder_hidden_states=None)
+        hidden_states = hidden_states + self.ff(norm_hidden_states)
         return hidden_states.clamp(-fp16_max, fp16_max)
 
 
@@ -257,6 +274,10 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         ff_mult: int = 4,
         dropout: float = 0.1,
         eps: float = 1e-5,
+        bias: bool = False,
+        embedder_bias: bool = True,
+        elementwise_affine: bool = False,
+        embedder_elementwise_affine: bool = True,
     ):
         super().__init__()
         self.gradient_checkpointing = False
@@ -274,7 +295,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.base_seq_len,
             dim=self.patched_in_channels,
             dim_out=self.inner_dim,
-            eps=eps,
+            eps=self.config.eps,
+            bias=self.config.embedder_bias,
+            elementwise_affine=self.config.embedder_elementwise_affine,
         )
 
         self.text_embedder = RaiFlowTextEmbedder(
@@ -284,7 +307,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.config.encoder_max_sequence_length,
             dim=self.encoder_in_channels, # dim + pos
             dim_out=self.inner_dim,
-            eps=eps,
+            eps=self.config.eps,
+            bias=self.config.embedder_bias,
+            elementwise_affine=self.config.embedder_elementwise_affine,
         )
 
         self.joint_transformer_blocks = nn.ModuleList(
@@ -294,14 +319,16 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
                     ff_mult=self.config.ff_mult,
-                    dropout=dropout,
-                    eps=eps,
+                    dropout=self.config.dropout,
+                    eps=self.config.eps,
+                    bias=self.config.bias,
+                    elementwise_affine=self.config.elementwise_affine,
                 )
                 for _ in range(self.config.num_joint_layers)
             ]
         )
 
-        self.norm_context = RaiFlowRMSNorm(self.inner_dim, eps=eps)
+        self.norm_context = RaiFlowRMSNorm(self.inner_dim, eps=self.config.eps, elementwise_affine=self.config.elementwise_affine)
         self.cond_transformer_blocks = nn.ModuleList(
             [
                 RaiFlowConditionalTransformer2DBlock(
@@ -309,8 +336,10 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
                     ff_mult=self.config.ff_mult,
-                    dropout=dropout,
-                    eps=eps,
+                    dropout=self.config.dropout,
+                    eps=self.config.eps,
+                    bias=self.config.bias,
+                    elementwise_affine=self.config.elementwise_affine,
                 )
                 for _ in range(self.config.num_layers)
             ]
@@ -323,8 +352,10 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
                     ff_mult=self.config.ff_mult,
-                    dropout=dropout,
-                    eps=eps,
+                    dropout=self.config.dropout,
+                    eps=self.config.eps,
+                    bias=self.config.bias,
+                    elementwise_affine=self.config.elementwise_affine,
                 )
                 for _ in range(self.config.num_refiner_layers)
             ]
@@ -334,7 +365,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             patch_size=self.config.patch_size,
             dim=self.inner_dim,
             dim_out=self.out_channels,
-            eps=eps,
+            eps=self.config.eps,
+            bias=self.config.embedder_bias,
+            elementwise_affine=self.config.embedder_elementwise_affine,
         )
 
     def fuse_qkv_projections(self):
