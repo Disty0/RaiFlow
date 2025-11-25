@@ -16,28 +16,16 @@ from transformers import ImageProcessingMixin
 
 @torch.no_grad()
 def rgb_to_ycbcr_tensor(image: torch.ByteTensor) -> torch.FloatTensor:
-    if image.dtype != torch.float32:
-        img = image.to(dtype=torch.float32).div_(255)
-    else:
-        img = image / 255
-    y = (img[:,:,:,0] * 0.299).add_(img[:,:,:,1], alpha=0.587).add_(img[:,:,:,2], alpha=0.114)
-    cb = (img[:,:,:,0] * -0.168935).add_(img[:,:,:,1], alpha=-0.331665).add_(img[:,:,:,2], alpha=0.50059).add_(0.5)
-    cr = (img[:,:,:,0] * 0.499813).add_(img[:,:,:,1], alpha=-0.418531).add_(img[:,:,:,2], alpha=-0.081282).add_(0.5)
-    ycbcr = torch.add(-1, torch.stack([y,cb,cr], dim=1), alpha=2)
+    rgb_weights = torch.tensor([[0.002345098, -0.001323419, 0.003921569], [0.004603922, -0.00259815, -0.003283824], [0.000894118, 0.003921569, -0.000637744]], device=image.device)
+    ycbcr = torch.einsum("cv,...chw->...vhw", [rgb_weights, image.to(dtype=torch.float32).permute(0,3,1,2)])
+    ycbcr[:,0,:,:].add_(-1)
     return ycbcr
 
 
 @torch.no_grad()
 def ycbcr_tensor_to_rgb(ycbcr: torch.FloatTensor) -> torch.ByteTensor:
-    ycbcr_img = (ycbcr / 2)
-    y = ycbcr_img[:,0,:,:].add_(0.5)
-    cb = ycbcr_img[:,1,:,:]
-    cr = ycbcr_img[:,2,:,:]
-
-    r = (cr * 1.402525).add_(y)
-    g = (cb * -0.343730).add_(cr, alpha=-0.714401).add_(y)
-    b = (cb * 1.769905).add_(cr, alpha=0.000013).add_(y)
-    rgb = torch.stack([r,g,b], dim=-1).mul_(255).round_().clamp_(0,255).to(dtype=torch.uint8)
+    ycbcr_weights = torch.tensor([[127.5, 127.5, 127.5], [0, -43.877376465, 225.93], [178.755, -91.052376465, 0]], device=ycbcr.device)
+    rgb = torch.einsum("cv,...chw->...vhw", [ycbcr_weights, ycbcr]).add_(127.5).round_().clamp_(0,255).permute(0,2,3,1).to(dtype=torch.uint8)
     return rgb
 
 
