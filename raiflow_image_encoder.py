@@ -89,8 +89,7 @@ def rgb_to_ycbcr_tensor(image: torch.ByteTensor) -> torch.FloatTensor:
 
 def ycbcr_tensor_to_rgb(ycbcr: torch.FloatTensor) -> torch.ByteTensor:
     ycbcr_weights = torch.tensor([[127.5, 127.5, 127.5], [0, -43.877376465, 225.93], [178.755, -91.052376465, 0]], device=ycbcr.device)
-    rgb = torch.einsum("cv,...chw->...vhw", [ycbcr_weights, ycbcr]).add(127.5).round().clamp(0,255).permute(0,2,3,1).to(dtype=torch.uint8)
-    return rgb
+    return torch.einsum("cv,...chw->...vhw", [ycbcr_weights, ycbcr]).add(127.5).round().clamp(0,255).permute(0,2,3,1).to(dtype=torch.uint8)
 
 
 def encode_jpeg_tensor(img: torch.FloatTensor, block_size: int=16, cbcr_downscale: int=2, norm: str="ortho") -> torch.FloatTensor:
@@ -102,8 +101,7 @@ def encode_jpeg_tensor(img: torch.FloatTensor, block_size: int=16, cbcr_downscal
     y = encode_single_channel_dct_2d(img[:, 0, :,:], block_size=block_size, norm=norm)
     cb = encode_single_channel_dct_2d(down_img[:, 0, :,:], block_size=cbcr_block_size, norm=norm)
     cr = encode_single_channel_dct_2d(down_img[:, 1, :,:], block_size=cbcr_block_size, norm=norm)
-    ycbcr = torch.cat([y,cb,cr], dim=1)
-    return ycbcr
+    return torch.cat([y,cb,cr], dim=1)
 
 
 def decode_jpeg_tensor(jpeg_img: torch.FloatTensor, block_size: int=16, cbcr_downscale: int=2, norm: str="ortho") -> torch.FloatTensor:
@@ -120,8 +118,7 @@ def decode_jpeg_tensor(jpeg_img: torch.FloatTensor, block_size: int=16, cbcr_dow
     upsample = torchvision.transforms.Resize((h_blocks*block_size, w_blocks*block_size), interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
     cb = upsample(cb)
     cr = upsample(cr)
-    ycbcr = torch.stack([y,cb,cr], dim=1)
-    return ycbcr
+    return torch.stack([y,cb,cr], dim=1)
 
 
 def process_image_input(images: PipelineImageInput) -> torch.ByteTensor:
