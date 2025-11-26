@@ -388,6 +388,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         scale_timesteps: bool = True,
         return_dict: bool = True,
+        return_x0: bool = False,
     ) -> Union[RaiFlowTransformer2DModelOutput, Tuple[torch.FloatTensor]]:
         """
         The [`RaiFlowTransformer2DModel`] forward method.
@@ -520,10 +521,14 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         else:
             x0_pred = self.unembedder(hidden_states, height=height, width=width)
 
-        # multiply your flow target and model_pred with sigmas * (torch.pi/2) to prevent training loss from exploding
-        # using x0_pred target instead of flow target for training doesn't have this issue
-        assert noisy_model_input.dtype == torch.float32 and x0_pred.dtype == torch.float32 and timestep.dtype == torch.float32, "model outputs and inputs should be in float32"
-        output = (noisy_model_input - x0_pred) / timestep.view(batch_size, 1, 1, 1)
+        if return_x0:
+            assert x0_pred.dtype == torch.float32, "model outputs and inputs should be in float32"
+            output = x0_pred
+        else:
+            # multiply your flow target and model_pred with sigmas * (torch.pi/2) to prevent training loss from exploding
+            # using x0_pred target instead of flow target for training doesn't have this issue
+            assert noisy_model_input.dtype == torch.float32 and x0_pred.dtype == torch.float32 and timestep.dtype == torch.float32, "model outputs and inputs should be in float32"
+            output = (noisy_model_input - x0_pred) / timestep.view(batch_size, 1, 1, 1)
 
         if USE_PEFT_BACKEND:
             # remove `lora_scale` from each PEFT layer
