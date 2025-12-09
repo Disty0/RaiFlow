@@ -2,13 +2,11 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-fp16_max = 65504
-
 
 class RaiFlowRMSNorm(nn.RMSNorm):
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         return F.rms_norm(
-            hidden_states.clamp(-fp16_max, fp16_max).to(dtype=torch.float32),
+            hidden_states.clamp(-65504, 65504).to(dtype=torch.float32),
             self.normalized_shape,
             self.weight,
             self.eps,

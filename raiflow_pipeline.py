@@ -125,7 +125,7 @@ class RaiFlowPipeline(DiffusionPipeline):
     r"""
     Args:
         transformer ([`RaiFlowTransformer2DModel`]):
-            Conditional Transformer (EMMDit) architecture to denoise the encoded image latents.
+            Diffusion Transformer (DiT) architecture to denoise the encoded image latents.
         scheduler ([`FlowMatchEulerDiscreteScheduler`]):
             A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
         tokenizer (`Qwen2Tokenizer`):
@@ -137,7 +137,7 @@ class RaiFlowPipeline(DiffusionPipeline):
 
     model_cpu_offload_seq = "transformer"
     _optional_components = []
-    _callback_tensor_inputs = ["latents", "prompt_embeds", "noise_pred", "x0_pred", "hidden_states", "encoder_hidden_states"]
+    _callback_tensor_inputs = ["latents", "prompt_embeds", "noise_pred", "x0_pred"]
 
     def __init__(
         self,
@@ -510,7 +510,7 @@ class RaiFlowPipeline(DiffusionPipeline):
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
 
-                noise_pred, x0_pred, hidden_states, encoder_hidden_states = self.transformer(
+                noise_pred, x0_pred = self.transformer(
                     hidden_states=latent_model_input,
                     encoder_hidden_states=prompt_embeds,
                     timestep=t.expand(latent_model_input.shape[0]),
@@ -553,6 +553,6 @@ class RaiFlowPipeline(DiffusionPipeline):
             image = self.image_encoder.decode(latents, return_type=output_type)
 
         if not return_dict:
-            return (image, x0_pred, hidden_states, encoder_hidden_states)
+            return (image, x0_pred)
 
-        return RaiFlowPipelineOutput(images=image, x0_pred=x0_pred, hidden_states=hidden_states, encoder_hidden_states=encoder_hidden_states)
+        return RaiFlowPipelineOutput(images=image, x0_pred=x0_pred)

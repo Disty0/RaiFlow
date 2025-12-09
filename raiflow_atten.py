@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Tuple, Optional
 
 import torch
 from torch import nn
@@ -33,7 +33,7 @@ def dispatch_attention_fn(
     return out
 
 
-def _get_projections(attn: "RaiFlowAttention", hidden_states, encoder_hidden_states=None):
+def _get_projections(attn: "RaiFlowAttention", hidden_states: torch.FloatTensor) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
     heads = attn.heads
     head_dim = attn.head_dim
 
@@ -43,66 +43,31 @@ def _get_projections(attn: "RaiFlowAttention", hidden_states, encoder_hidden_sta
 
     query = attn.norm_q(query)
     key = attn.norm_k(key)
-
-    if encoder_hidden_states is not None:
-        encoder_query = attn.to_added_q(encoder_hidden_states).unflatten(-1, (heads, head_dim))
-        encoder_key = attn.to_added_k(encoder_hidden_states).unflatten(-1, (heads, head_dim))
-        encoder_value = attn.to_added_v(encoder_hidden_states).unflatten(-1, (heads, head_dim))
-
-        encoder_query = attn.norm_added_q(encoder_query)
-        encoder_key = attn.norm_added_k(encoder_key)
-    else:
-        encoder_query = encoder_key = encoder_value = None
-    return query, key, value, encoder_query, encoder_key, encoder_value
+    return query, key, value
 
 
-def _get_fused_projections(attn: "RaiFlowAttention", hidden_states, encoder_hidden_states=None):
+def _get_fused_projections(attn: "RaiFlowAttention", hidden_states: torch.FloatTensor) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
     heads = attn.heads
     head_dim = attn.head_dim
 
     query, key, value = attn.to_qkv(hidden_states).unflatten(-1, (3*heads, head_dim)).split(heads, dim=-2)
     query = attn.norm_q(query)
     key = attn.norm_k(key)
-
-    if encoder_hidden_states is not None:
-        encoder_query, encoder_key, encoder_value = attn.to_added_qkv(encoder_hidden_states).unflatten(-1, (3*heads, head_dim)).split(heads, dim=-2)
-        encoder_query = attn.norm_added_q(encoder_query)
-        encoder_key = attn.norm_added_k(encoder_key)
-    else:
-        encoder_query = encoder_key = encoder_value = None
-    return query, key, value, encoder_query, encoder_key, encoder_value
+    return query, key, value
 
 
-def _get_qkv_projections(attn: "RaiFlowAttention", hidden_states, encoder_hidden_states=None):
+def _get_qkv_projections(attn: "RaiFlowAttention", hidden_states: torch.FloatTensor) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
     if attn.fused_projections:
-        return _get_fused_projections(attn, hidden_states, encoder_hidden_states)
-    return _get_projections(attn, hidden_states, encoder_hidden_states)
+        return _get_fused_projections(attn, hidden_states)
+    return _get_projections(attn, hidden_states)
 
 
 class RaiFlowAttnProcessor:
-    def __call__(self, attn: "RaiFlowAttention", hidden_states: torch.FloatTensor, encoder_hidden_states: Optional[torch.FloatTensor] = None) -> torch.FloatTensor:
-        query, key, value, encoder_query, encoder_key, encoder_value = _get_qkv_projections(attn, hidden_states, encoder_hidden_states)
-        if encoder_hidden_states is not None:
-            query = torch.cat([encoder_query, query], dim=1)
-            key = torch.cat([encoder_key, key], dim=1)
-            value = torch.cat([encoder_value, value], dim=1)
-
-        attn_output = dispatch_attention_fn(query, key, value).flatten(-2, -1).to(dtype=query.dtype)
-        attn_output = torch.mul(
-            attn_output,
-            attn.gate(torch.cat([encoder_hidden_states, hidden_states], dim=1) if encoder_hidden_states is not None else hidden_states),
+    def __call__(self, attn: "RaiFlowAttention", hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        return torch.mul(
+            attn.gate(hidden_states),
+            dispatch_attention_fn(*_get_qkv_projections(attn, hidden_states)).flatten(-2, -1).to(dtype=hidden_states.dtype),
         )
-
-        if encoder_hidden_states is not None:
-            _, encoder_seq_len, _ = encoder_hidden_states.shape
-            attn_output, context_attn_output = attn_output[:, encoder_seq_len :], attn_output[:, : encoder_seq_len]
-            context_attn_output = attn.to_add_out(context_attn_output)
-        attn_output = attn.to_out(attn_output)
-
-        if encoder_hidden_states is not None:
-            return attn_output, context_attn_output
-        else:
-            return attn_output
 
 
 class RaiFlowAttention(torch.nn.Module):
@@ -117,13 +82,10 @@ class RaiFlowAttention(torch.nn.Module):
         eps: float = 1e-5,
         bias: bool = False,
         elementwise_affine: bool = False,
-        is_joint_attention: bool = False,
         processor: Optional[RaiFlowAttnProcessor] = None,
     ):
         super().__init__()
         self.query_dim = query_dim
-        self.is_joint_attention = is_joint_attention
-
         self.heads = heads
         self.head_dim = head_dim
         self.inner_dim = head_dim * heads
@@ -147,14 +109,6 @@ class RaiFlowAttention(torch.nn.Module):
         self.to_k = nn.Linear(self.query_dim, self.inner_dim, bias=bias)
         self.to_v = nn.Linear(self.query_dim, self.inner_dim, bias=bias)
 
-        if self.is_joint_attention:
-            self.to_added_q = nn.Linear(self.query_dim, self.inner_dim, bias=bias)
-            self.to_added_k = nn.Linear(self.query_dim, self.inner_dim, bias=bias)
-            self.to_added_v = nn.Linear(self.query_dim, self.inner_dim, bias=bias)
-            self.norm_added_q = RaiFlowRMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
-            self.norm_added_k = RaiFlowRMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
-            self.to_add_out = nn.Linear(self.inner_dim, self.out_context_dim, bias=bias)
-
     @torch.no_grad()
     def fuse_projections(self):
         device = self.to_q.weight.data.device
@@ -169,16 +123,6 @@ class RaiFlowAttention(torch.nn.Module):
         if use_bias:
             self.to_qkv.bias.copy_(torch.cat([self.to_q.bias.data, self.to_k.bias.data, self.to_v.bias.data]))
         del self.to_q, self.to_k, self.to_v
-
-        if self.is_joint_attention:
-            output_channel_size, channel_size = self.to_added_q.weight.shape
-            output_channel_size = output_channel_size * 3
-            use_bias = bool(self.to_added_qkv.bias is not None)
-            self.to_added_qkv = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            self.to_added_qkv.weight.copy_(torch.cat([self.to_added_q.weight.data, self.to_added_k.weight.data, self.to_added_v.weight.data]))
-            if use_bias:
-                self.to_added_qkv.bias.copy_(torch.cat([self.to_added_q.bias.data, self.to_added_k.bias.data, self.to_added_v.bias.data]))
-            del self.to_added_q, self.to_added_k, self.to_added_v
 
     @torch.no_grad()
     def unfuse_projections(self):
@@ -204,26 +148,5 @@ class RaiFlowAttention(torch.nn.Module):
             del to_q_bias, to_k_bias, to_v_bias
         del self.to_qkv, to_q, to_k, to_v
 
-        if self.is_joint_attention:
-            device = self.to_added_qkv.weight.data.device
-            dtype = self.to_added_qkv.weight.data.dtype
-            output_channel_size, channel_size = self.to_added_qkv.weight.shape
-            output_channel_size = output_channel_size // 3
-            use_bias = bool(self.to_added_qkv.bias is not None)
-            self.to_added_q = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            self.to_added_k = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            self.to_added_v = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            to_added_q, to_added_k, to_added_v = self.to_added_qkv.weight.data.chunk(3)
-            self.to_added_q.weight.copy_(to_added_q)
-            self.to_added_k.weight.copy_(to_added_k)
-            self.to_added_v.weight.copy_(to_added_v)
-            if use_bias:
-                to_added_q_bias, to_added_k_bias, to_added_v_bias = self.to_added_qkv.bias.data.chunk(3)
-                self.to_added_q.bias.copy_(to_added_q_bias)
-                self.to_added_k.bias.copy_(to_added_k_bias)
-                self.to_added_v.bias.copy_(to_added_v_bias)
-                del to_added_q_bias, to_added_k_bias, to_added_v_bias
-            del self.to_added_qkv, to_added_q, to_added_k, to_added_v
-
-    def forward(self, hidden_states: torch.FloatTensor, encoder_hidden_states: Optional[torch.FloatTensor] = None) -> torch.FloatTensor:
-        return self.processor(self, hidden_states, encoder_hidden_states=encoder_hidden_states)
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        return self.processor(self, hidden_states)
