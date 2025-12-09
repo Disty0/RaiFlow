@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional
 
 import torch
 from torch import nn
@@ -73,40 +73,10 @@ def _get_fused_projections(attn: "RaiFlowAttention", hidden_states, encoder_hidd
     return query, key, value, encoder_query, encoder_key, encoder_value
 
 
-def _get_cross_projections(attn: "RaiFlowAttention", hidden_states, encoder_hidden_states):
-    heads = attn.heads
-    head_dim = attn.head_dim
-
-    query = attn.to_q(hidden_states).unflatten(-1, (heads, head_dim))
-    key = attn.to_k(encoder_hidden_states).unflatten(-1, (heads, head_dim))
-    value = attn.to_v(encoder_hidden_states).unflatten(-1, (heads, head_dim))
-
-    query = attn.norm_q(query)
-    key = attn.norm_k(key)
-    return query, key, value
-
-
-def _get_fused_cross_projections(attn: "RaiFlowAttention", hidden_states, encoder_hidden_states):
-    heads = attn.heads
-    head_dim = attn.head_dim
-
-    query = attn.to_q(hidden_states).unflatten(-1, (heads, head_dim))
-    key, value = attn.to_kv(encoder_hidden_states).unflatten(-1, (2*heads, head_dim)).split(heads, dim=-2)
-
-    query = attn.norm_q(query)
-    key = attn.norm_k(key)
-    return query, key, value
-
-
 def _get_qkv_projections(attn: "RaiFlowAttention", hidden_states, encoder_hidden_states=None):
-    if attn.is_cross_attention:
-        if attn.fused_projections:
-            return _get_fused_cross_projections(attn, hidden_states, encoder_hidden_states)
-        return _get_cross_projections(attn, hidden_states, encoder_hidden_states)
-    else:
-        if attn.fused_projections:
-            return _get_fused_projections(attn, hidden_states, encoder_hidden_states)
-        return _get_projections(attn, hidden_states, encoder_hidden_states)
+    if attn.fused_projections:
+        return _get_fused_projections(attn, hidden_states, encoder_hidden_states)
+    return _get_projections(attn, hidden_states, encoder_hidden_states)
 
 
 class RaiFlowAttnProcessor:
@@ -135,14 +105,6 @@ class RaiFlowAttnProcessor:
             return attn_output
 
 
-class RaiFlowCrossAttnProcessor:
-    def __call__(self, attn: "RaiFlowAttention", hidden_states: torch.FloatTensor, encoder_hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        query, key, value = _get_qkv_projections(attn, hidden_states, encoder_hidden_states)
-        attn_output = dispatch_attention_fn(query, key, value).flatten(-2, -1).to(dtype=query.dtype)
-        attn_output = attn.to_out(attn_output * attn.gate(hidden_states))
-        return attn_output
-
-
 class RaiFlowAttention(torch.nn.Module):
     def __init__(
         self,
@@ -156,13 +118,11 @@ class RaiFlowAttention(torch.nn.Module):
         bias: bool = False,
         elementwise_affine: bool = False,
         is_joint_attention: bool = False,
-        is_cross_attention: bool = False,
-        processor: Optional[Union["RaiFlowAttnProcessor", "RaiFlowCrossAttnProcessor"]] = None,
+        processor: Optional[RaiFlowAttnProcessor] = None,
     ):
         super().__init__()
         self.query_dim = query_dim
         self.is_joint_attention = is_joint_attention
-        self.is_cross_attention = is_cross_attention
 
         self.heads = heads
         self.head_dim = head_dim
@@ -201,24 +161,14 @@ class RaiFlowAttention(torch.nn.Module):
         dtype = self.to_q.weight.data.dtype
         self.fused_projections = True
 
-        if self.is_cross_attention:
-            output_channel_size, channel_size = self.to_k.weight.shape
-            output_channel_size = output_channel_size * 2
-            use_bias = bool(self.to_kv.bias is not None)
-            self.to_kv = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            self.to_kv.weight.copy_(torch.cat([self.to_k.weight.data, self.to_v.weight.data]))
-            if use_bias:
-                self.to_kv.bias.copy_(torch.cat([self.to_k.bias.data, self.to_v.bias.data]))
-            del self.to_k, self.to_v
-        else:
-            output_channel_size, channel_size = self.to_q.weight.shape
-            output_channel_size = output_channel_size * 3
-            use_bias = bool(self.to_qkv.bias is not None)
-            self.to_qkv = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            self.to_qkv.weight.copy_(torch.cat([self.to_q.weight.data, self.to_k.weight.data, self.to_v.weight.data]))
-            if use_bias:
-                self.to_qkv.bias.copy_(torch.cat([self.to_q.bias.data, self.to_k.bias.data, self.to_v.bias.data]))
-            del self.to_q, self.to_k, self.to_v
+        output_channel_size, channel_size = self.to_q.weight.shape
+        output_channel_size = output_channel_size * 3
+        use_bias = bool(self.to_qkv.bias is not None)
+        self.to_qkv = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
+        self.to_qkv.weight.copy_(torch.cat([self.to_q.weight.data, self.to_k.weight.data, self.to_v.weight.data]))
+        if use_bias:
+            self.to_qkv.bias.copy_(torch.cat([self.to_q.bias.data, self.to_k.bias.data, self.to_v.bias.data]))
+        del self.to_q, self.to_k, self.to_v
 
         if self.is_joint_attention:
             output_channel_size, channel_size = self.to_added_q.weight.shape
@@ -234,43 +184,25 @@ class RaiFlowAttention(torch.nn.Module):
     def unfuse_projections(self):
         self.fused_projections = False
 
-        if self.is_cross_attention:
-            device = self.to_kv.weight.data.device
-            dtype = self.to_kv.weight.data.dtype
-            output_channel_size, channel_size = self.to_kv.weight.shape
-            output_channel_size = output_channel_size // 2
-            use_bias = bool(self.to_kv.bias is not None)
-            self.to_k = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            self.to_v = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            to_k, to_v = self.to_kv.weight.data.chunk(2)
-            self.to_k.weight.copy_(to_k)
-            self.to_v.weight.copy_(to_v)
-            if use_bias:
-                to_k_bias, to_v_bias = self.to_kv.bias.data.chunk(2)
-                self.to_k.bias.copy_(to_k_bias)
-                self.to_v.bias.copy_(to_v_bias)
-                del to_k_bias, to_v_bias
-            del self.to_kv, to_k, to_v
-        else:
-            device = self.to_qkv.weight.data.device
-            dtype = self.to_qkv.weight.data.dtype
-            output_channel_size, channel_size = self.to_qkv.weight.shape
-            output_channel_size = output_channel_size // 3
-            use_bias = bool(self.to_qkv.bias is not None)
-            self.to_q = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            self.to_k = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            self.to_v = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
-            to_q, to_k, to_v = self.to_qkv.weight.data.chunk(3)
-            self.to_q.weight.copy_(to_q)
-            self.to_k.weight.copy_(to_k)
-            self.to_v.weight.copy_(to_v)
-            if use_bias:
-                to_q_bias, to_k_bias, to_v_bias = self.to_qkv.bias.data.chunk(3)
-                self.to_q.bias.copy_(to_q_bias)
-                self.to_k.bias.copy_(to_k_bias)
-                self.to_v.bias.copy_(to_v_bias)
-                del to_q_bias, to_k_bias, to_v_bias
-            del self.to_qkv, to_q, to_k, to_v
+        device = self.to_qkv.weight.data.device
+        dtype = self.to_qkv.weight.data.dtype
+        output_channel_size, channel_size = self.to_qkv.weight.shape
+        output_channel_size = output_channel_size // 3
+        use_bias = bool(self.to_qkv.bias is not None)
+        self.to_q = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
+        self.to_k = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
+        self.to_v = nn.Linear(channel_size, output_channel_size, bias=use_bias, device=device, dtype=dtype)
+        to_q, to_k, to_v = self.to_qkv.weight.data.chunk(3)
+        self.to_q.weight.copy_(to_q)
+        self.to_k.weight.copy_(to_k)
+        self.to_v.weight.copy_(to_v)
+        if use_bias:
+            to_q_bias, to_k_bias, to_v_bias = self.to_qkv.bias.data.chunk(3)
+            self.to_q.bias.copy_(to_q_bias)
+            self.to_k.bias.copy_(to_k_bias)
+            self.to_v.bias.copy_(to_v_bias)
+            del to_q_bias, to_k_bias, to_v_bias
+        del self.to_qkv, to_q, to_k, to_v
 
         if self.is_joint_attention:
             device = self.to_added_qkv.weight.data.device
