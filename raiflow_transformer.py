@@ -277,14 +277,25 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 timestep_max, timestep_min = timestep.max(), timestep.min()
                 assert timestep_max <= 1 and timestep_min >= 0, f"timesteps sigmas range should be between 1 and zero but got {timestep_max} and {timestep_min}"
 
-        encoder_hidden_states = self.text_embedder(
-            encoder_hidden_states=encoder_hidden_states,
-            timestep=timestep,
-            dtype=dtype,
-            latents_seq_len=latents_seq_len,
-            encoder_seq_len=encoder_seq_len,
-            batch_size=batch_size,
-        )
+        if use_checkpointing:
+            encoder_hidden_states = self._gradient_checkpointing_func(
+                self.text_embedder,
+                encoder_hidden_states,
+                timestep,
+                dtype,
+                latents_seq_len,
+                encoder_seq_len,
+                batch_size,
+            )
+        else:
+            encoder_hidden_states = self.text_embedder(
+                encoder_hidden_states=encoder_hidden_states,
+                timestep=timestep,
+                dtype=dtype,
+                latents_seq_len=latents_seq_len,
+                encoder_seq_len=encoder_seq_len,
+                batch_size=batch_size,
+            )
 
         hidden_states = self.latent_embedder(
             hidden_states=hidden_states,
