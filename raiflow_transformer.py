@@ -335,10 +335,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             else:
                 hidden_states = block(hidden_states=hidden_states)
 
-        if use_checkpointing:
-            x0_pred = self._gradient_checkpointing_func(self.unembedder, hidden_states, height, width)
-        else:
-            x0_pred = self.unembedder(hidden_states, height=height, width=width)
+        x0_pred = self.unembedder(hidden_states, height=height, width=width)
 
         if return_x0:
             assert x0_pred.dtype == torch.float32, "model outputs and inputs should be in float32"
