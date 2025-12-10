@@ -297,16 +297,29 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 batch_size=batch_size,
             )
 
-        hidden_states = self.latent_embedder(
-            hidden_states=hidden_states,
-            timestep=timestep,
-            dtype=dtype,
-            latents_seq_len=latents_seq_len,
-            encoder_seq_len=encoder_seq_len,
-            batch_size=batch_size,
-            height=height,
-            width=width,
-        )
+        if use_checkpointing:
+            hidden_states = self._gradient_checkpointing_func(
+                self.latent_embedder,
+                hidden_states,
+                timestep,
+                dtype,
+                latents_seq_len,
+                encoder_seq_len,
+                batch_size,
+                height,
+                width,
+            )
+        else:
+            hidden_states = self.latent_embedder(
+                hidden_states=hidden_states,
+                timestep=timestep,
+                dtype=dtype,
+                latents_seq_len=latents_seq_len,
+                encoder_seq_len=encoder_seq_len,
+                batch_size=batch_size,
+                height=height,
+                width=width,
+            )
 
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=-2)
         for index_block, block in enumerate(self.transformer_blocks):
