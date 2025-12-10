@@ -64,9 +64,11 @@ def _get_qkv_projections(attn: "RaiFlowAttention", hidden_states: torch.FloatTen
 
 class RaiFlowAttnProcessor:
     def __call__(self, attn: "RaiFlowAttention", hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        return torch.mul(
-            attn.gate(hidden_states),
-            dispatch_attention_fn(*_get_qkv_projections(attn, hidden_states)).flatten(-2, -1).to(dtype=hidden_states.dtype),
+        return attn.to_out(
+            torch.mul(
+                attn.gate(hidden_states),
+                dispatch_attention_fn(*_get_qkv_projections(attn, hidden_states)).flatten(-2, -1).to(dtype=hidden_states.dtype),
+            )
         )
 
 
