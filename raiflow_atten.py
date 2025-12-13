@@ -3,7 +3,7 @@ from typing import Tuple, Optional
 import torch
 from torch import nn
 
-from .raiflow_layers import RaiFlowRMSNorm
+fp16_max = 65504
 
 
 def dispatch_attention_fn(
@@ -41,8 +41,8 @@ def _get_projections(attn: "RaiFlowAttention", hidden_states: torch.FloatTensor)
     key = attn.to_k(hidden_states).unflatten(-1, (heads, head_dim))
     value = attn.to_v(hidden_states).unflatten(-1, (heads, head_dim))
 
-    query = attn.norm_q(query)
-    key = attn.norm_k(key)
+    query = attn.norm_q(query.clamp(-fp16_max, fp16_max))
+    key = attn.norm_k(key.clamp(-fp16_max, fp16_max))
     return query, key, value
 
 
@@ -51,8 +51,8 @@ def _get_fused_projections(attn: "RaiFlowAttention", hidden_states: torch.FloatT
     head_dim = attn.head_dim
 
     query, key, value = attn.to_qkv(hidden_states).unflatten(-1, (3*heads, head_dim)).split(heads, dim=-2)
-    query = attn.norm_q(query)
-    key = attn.norm_k(key)
+    query = attn.norm_q(query.clamp(-fp16_max, fp16_max))
+    key = attn.norm_k(key.clamp(-fp16_max, fp16_max))
     return query, key, value
 
 
@@ -104,8 +104,8 @@ class RaiFlowAttention(torch.nn.Module):
         )
 
         self.to_out = nn.Linear(self.inner_dim, self.out_dim, bias=bias)
-        self.norm_q = RaiFlowRMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
-        self.norm_k = RaiFlowRMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm_q = nn.RMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm_k = nn.RMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
 
         self.to_q = nn.Linear(self.query_dim, self.inner_dim, bias=bias)
         self.to_k = nn.Linear(self.query_dim, self.inner_dim, bias=bias)

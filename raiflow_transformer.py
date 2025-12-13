@@ -8,12 +8,30 @@ from diffusers.loaders import PeftAdapterMixin
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
 
-from .raiflow_layers import RaiFlowFeedForward, RaiFlowRMSNorm
 from .raiflow_atten import RaiFlowAttention, RaiFlowAttnProcessor
 from .raiflow_embedder import RaiFlowLatentEmbedder, RaiFlowTextEmbedder, RaiFlowLatentUnembedder
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+fp16_max = 65504
+
+
+class RaiFlowFeedForward(nn.Module):
+    def __init__(self, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1, bias: bool = False):
+        super().__init__()
+        inner_dim = int(max(dim, dim_out) * ff_mult)
+
+        self.ff_gate = nn.Sequential(
+            nn.Linear(dim, inner_dim, bias=bias),
+            nn.GELU(approximate="none"),
+            nn.Dropout(dropout),
+        )
+
+        self.ff_proj = nn.Linear(dim, inner_dim, bias=bias)
+        self.ff_out = nn.Linear(inner_dim, dim_out, bias=bias)
+
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        return self.ff_out(self.ff_proj(hidden_states) * self.ff_gate(hidden_states))
 
 
 class RaiFlowTransformerBlock(nn.Module):
@@ -42,7 +60,7 @@ class RaiFlowTransformerBlock(nn.Module):
     ):
         super().__init__()
 
-        self.norm = RaiFlowRMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm = nn.RMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
         self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout, bias=bias)
 
         self.attn = RaiFlowAttention(
@@ -59,10 +77,11 @@ class RaiFlowTransformerBlock(nn.Module):
         )
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        hidden_states = hidden_states.clamp(-fp16_max, fp16_max)
         norm_hidden_states = self.norm(hidden_states)
         hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states)
         hidden_states = hidden_states + self.ff(norm_hidden_states)
-        return hidden_states.clamp(-65504, 65504)
+        return hidden_states
 
 
 class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
@@ -98,7 +117,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     _keep_in_fp32_modules = [
         "latent_embedder", "unembedder", "text_embedder_proj",
         "norm_latent_embedder", "norm_text_embedder", "norm_unembed",
-        "norm_ff", "norm_attn", "norm_q", "norm_k", "norm",
     ]
 
     @register_to_config
