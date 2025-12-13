@@ -361,6 +361,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         else:
             # multiply your flow target and model_pred with sigmas * (torch.pi/2) to prevent training loss from exploding
             # using x0_pred target instead of flow target for training doesn't have this issue
+            # or use return_x0 with `model_pred = noise - model_pred` instead
             assert noisy_model_input.dtype == torch.float32 and x0_pred.dtype == torch.float32 and timestep.dtype == torch.float32, "model outputs and inputs should be in float32"
             output = (noisy_model_input - x0_pred) / timestep.view(batch_size, 1, 1, 1)
 
