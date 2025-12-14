@@ -79,7 +79,7 @@ class RaiFlowTransformerBlock(nn.Module):
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         hidden_states = hidden_states.clamp(-fp16_max, fp16_max)
         norm_hidden_states = self.norm(hidden_states)
-        hidden_states = hidden_states + self.attn(hidden_states=norm_hidden_states)
+        hidden_states = hidden_states + self.attn(norm_hidden_states)
         hidden_states = hidden_states + self.ff(norm_hidden_states)
         return hidden_states
 

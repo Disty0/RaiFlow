@@ -175,7 +175,7 @@ class RaiFlowPipeline(DiffusionPipeline):
         num_images_per_prompt: int = 1,
         do_classifier_free_guidance: bool = True,
         negative_prompt: Optional[Union[str, List[str]]] = None,
-        max_sequence_length: int = 1024,
+        max_sequence_length: int = 512,
         pad_to_multiple_of: int = 256,
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
         r"""
