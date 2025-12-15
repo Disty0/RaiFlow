@@ -103,7 +103,7 @@ class RaiFlowTextEmbedder(nn.Module):
                     secondary_seq_len=latents_seq_len,
                     base_seq_len=self.base_seq_len,
                     timestep=timestep,
-                    is_latent=True,
+                    is_latent=False,
                 )
 
             encoder_hidden_states = torch.cat([encoder_hidden_states.to(dtype=torch.float32), posed_encoder_1d], dim=2)
@@ -147,7 +147,10 @@ def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, device: torch.device, dtype
     # Create 1D linspace positions
     posed_embeds_ch0 = torch.linspace(start=0, end=1, steps=seq_len, device=device, dtype=dtype)
     posed_embeds_ch1 = torch.linspace(start=0, end=1, steps=(seq_len + secondary_seq_len), device=device, dtype=dtype)
-    posed_embeds_ch1 = posed_embeds_ch1[secondary_seq_len if is_latent else seq_len :]
+    if is_latent:
+        posed_embeds_ch1 = posed_embeds_ch1[secondary_seq_len:]
+    else:
+        posed_embeds_ch1 = posed_embeds_ch1[:seq_len]
     posed_embeds_ch2 = ones * (seq_len / base_seq_len)
     posed_embeds_ch3 = ones * timestep
 

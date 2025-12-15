@@ -89,7 +89,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     The Multi Modal Convoluted Transformer model introduced in RaiFlow.
 
     Parameters:
-        sample_size (`int`, *optional*, defaults to 128): The width of the latent images. This is fixed during training since
+        sample_size (`int`, *optional*, defaults to 64): The width of the latent images. This is fixed during training since
             it is used to learn a number of position embeddings.
         in_channels (`int`, *optional*, defaults to 384): The number of channels in the input.
         num_layers (`int`, *optional*, defaults to 16): The number of Transformer blocks to use.
@@ -122,7 +122,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     @register_to_config
     def __init__(
         self,
-        sample_size: int = 128,
+        sample_size: int = 64,
         in_channels: int = 384,
         num_layers: int = 16,
         num_refiner_layers: int = 4,
