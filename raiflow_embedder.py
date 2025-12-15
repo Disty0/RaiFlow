@@ -142,37 +142,44 @@ class RaiFlowLatentUnembedder(nn.Module):
 
 
 def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, device: torch.device, dtype: torch.dtype, secondary_seq_len: int, base_seq_len: int, timestep: torch.FloatTensor, is_latent: bool) -> torch.FloatTensor:
-    ones = torch.ones((batch_size, seq_len, 1), device=device, dtype=dtype)
-
-    # Create 1D linspace positions
-    posed_embeds_ch0 = torch.linspace(start=0, end=1, steps=seq_len, device=device, dtype=dtype)
-    posed_embeds_ch1 = torch.linspace(start=0, end=1, steps=(seq_len + secondary_seq_len), device=device, dtype=dtype)
+    global_pos = torch.linspace(start=0, end=1, steps=(seq_len + secondary_seq_len), device=device, dtype=dtype)
     if is_latent:
-        posed_embeds_ch1 = posed_embeds_ch1[secondary_seq_len:]
+        global_pos = global_pos[secondary_seq_len:]
     else:
-        posed_embeds_ch1 = posed_embeds_ch1[:seq_len]
-    posed_embeds_ch2 = ones * (seq_len / base_seq_len)
-    posed_embeds_ch3 = ones * timestep
+        global_pos = global_pos[:seq_len]
 
-    # stack and repeat for batch_size
-    posed_embeds = torch.stack([posed_embeds_ch0, posed_embeds_ch1], dim=1)
-    posed_embeds = posed_embeds.unsqueeze(0).repeat(batch_size, 1, 1)
+    pos_embeds = torch.stack(
+        [
+            torch.linspace(start=0, end=1, steps=seq_len, device=device, dtype=dtype),
+            global_pos,
+        ],
+        dim=1,
+    ).unsqueeze(0).repeat(batch_size, 1, 1)
+    del global_pos
 
-    posed_embeds = torch.cat([posed_embeds, posed_embeds_ch2, posed_embeds_ch3], dim=2)
-    return posed_embeds
+    shape = (batch_size, seq_len, 1)
+    pos_embeds = torch.cat(
+        [
+            pos_embeds,
+            torch.full(shape, (seq_len / base_seq_len), device=device, dtype=dtype),
+            timestep.expand(shape)
+        ],
+        dim=2,
+    )
+    return pos_embeds
 
 
 def RaiFlowPosEmbed2D(batch_size: int, height: int, width: int, device: torch.device, dtype: torch.dtype) -> torch.FloatTensor:
-    max_dim = max(width, height)
-    max_dim_linspace = torch.linspace(0, 1, max_dim, device=device, dtype=dtype)
+    pos_x, pos_y = torch.meshgrid(
+        torch.linspace(0, 1, height, device=device, dtype=dtype),
+        torch.linspace(0, 1, width, device=device, dtype=dtype),
+        indexing="ij",
+    )
 
-    # create 2D linspace positions grid
-    posed_latents_ch0 = torch.linspace(0, 1, height, device=device, dtype=dtype).unsqueeze(-1).repeat(1, width)
-    posed_latents_ch1 = max_dim_linspace[:height].unsqueeze(-1).repeat(1, width)
-    posed_latents_ch2 = torch.linspace(0, 1, width, device=device, dtype=dtype).unsqueeze(0).repeat(height, 1)
-    posed_latents_ch3 = max_dim_linspace[:width].unsqueeze(0).repeat(height, 1)
+    max_dim_linspace = torch.linspace(0, 1, max(width, height), device=device, dtype=dtype)
+    relative_pos_x, relative_pos_y = torch.meshgrid(max_dim_linspace[:height], max_dim_linspace[:width], indexing="ij")
+    del max_dim_linspace
 
-    # stack and repeat for batch_size
-    posed_latents = torch.stack([posed_latents_ch0, posed_latents_ch1, posed_latents_ch2, posed_latents_ch3], dim=0) # (4, height, width)
-    posed_latents = posed_latents.unsqueeze(0).repeat(batch_size, 1, 1, 1) # (batch_size, 4, height, width)
-    return posed_latents
+    pos_embeds = torch.stack([pos_x, relative_pos_x, pos_y, relative_pos_y], dim=0).unsqueeze(0).repeat(batch_size, 1, 1, 1)
+    del pos_x, pos_y, relative_pos_x, relative_pos_y
+    return pos_embeds
