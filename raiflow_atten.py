@@ -99,7 +99,7 @@ class RaiFlowAttention(torch.nn.Module):
 
         self.gate = nn.Sequential(
             nn.Linear(self.query_dim, self.inner_dim, bias=bias),
-            nn.GELU(approximate="none"),
+            nn.Sigmoid(),
             nn.Dropout(dropout),
         )
 
