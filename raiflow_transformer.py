@@ -57,6 +57,7 @@ class RaiFlowTransformerBlock(nn.Module):
         eps: float = 1e-5,
         bias: bool = False,
         elementwise_affine: bool = False,
+        use_headwise_gating: bool = False,
     ):
         super().__init__()
 
@@ -73,6 +74,7 @@ class RaiFlowTransformerBlock(nn.Module):
             eps=eps,
             bias=bias,
             elementwise_affine=elementwise_affine,
+            use_headwise_gating=use_headwise_gating,
             processor=RaiFlowAttnProcessor(),
         )
 
@@ -144,24 +146,21 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         embedder_bias: bool = True,
         elementwise_affine: bool = False,
         embedder_elementwise_affine: bool = True,
+        use_headwise_gating: bool = False,
     ):
         super().__init__()
         self.gradient_checkpointing = False
         self.out_channels = out_channels if out_channels is not None else self.config.in_channels
-        self.out_channels = self.out_channels * self.config.patch_size*self.config.patch_size
         self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
         self.embedding_dim = embedding_dim or self.inner_dim
         self.base_seq_len = (self.config.sample_size // self.config.patch_size) * (self.config.sample_size // self.config.patch_size)
-        self.patched_in_channels = (4 * self.config.max_freqs * 2) + ((self.config.in_channels + (2 * self.config.max_freqs ** 2)) * self.config.patch_size*self.config.patch_size)
-        self.encoder_in_channels = (4 * self.config.max_freqs * 2) + self.embedding_dim
 
         self.latent_embedder = RaiFlowLatentEmbedder(
             patch_size=self.config.patch_size,
             in_channels=self.config.in_channels,
             base_seq_len=self.base_seq_len,
             max_freqs=self.config.max_freqs,
-            dim=self.patched_in_channels,
-            dim_out=self.inner_dim,
+            inner_dim=self.inner_dim,
             eps=self.config.eps,
             bias=self.config.embedder_bias,
             elementwise_affine=self.config.embedder_elementwise_affine,
@@ -173,8 +172,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             pad_token_id=self.config.pad_token_id,
             base_seq_len=self.config.encoder_max_sequence_length,
             max_freqs=self.config.max_freqs,
-            dim=self.encoder_in_channels, # dim + pos
-            dim_out=self.inner_dim,
+            inner_dim=self.inner_dim,
             eps=self.config.eps,
             bias=self.config.embedder_bias,
             elementwise_affine=self.config.embedder_elementwise_affine,
@@ -191,6 +189,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     eps=self.config.eps,
                     bias=self.config.bias,
                     elementwise_affine=self.config.elementwise_affine,
+                    use_headwise_gating=self.config.use_headwise_gating,
                 )
                 for _ in range(self.config.num_layers)
             ]
@@ -207,6 +206,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     eps=self.config.eps,
                     bias=self.config.bias,
                     elementwise_affine=self.config.elementwise_affine,
+                    use_headwise_gating=self.config.use_headwise_gating,
                 )
                 for _ in range(self.config.num_refiner_layers)
             ]
@@ -214,8 +214,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
 
         self.unembedder = RaiFlowLatentUnembedder(
             patch_size=self.config.patch_size,
-            dim=self.inner_dim,
-            dim_out=self.out_channels,
+            inner_dim=self.inner_dim,
+            out_channels=self.out_channels,
             eps=self.config.eps,
             bias=self.config.embedder_bias,
             elementwise_affine=self.config.embedder_elementwise_affine,

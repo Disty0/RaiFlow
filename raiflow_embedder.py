@@ -11,19 +11,19 @@ class RaiFlowLatentEmbedder(nn.Module):
         in_channels: int,
         base_seq_len: int,
         max_freqs: int,
-        dim: int,
-        dim_out: int,
+        inner_dim: int,
         eps: float = 1e-5,
         bias: bool = True,
         elementwise_affine: bool = True,
     ):
         super().__init__()
         self.patch_size = patch_size
-        self.in_channels = in_channels
         self.base_seq_len = base_seq_len
         self.max_freqs = max_freqs
-        self.latent_embedder_proj = nn.Conv2d(dim, dim_out, 3, padding=1, bias=bias)
-        self.norm_latent_embedder = nn.RMSNorm(dim_out, eps=eps, elementwise_affine=elementwise_affine)
+
+        dim_in = (4 * self.max_freqs * 2) + ((in_channels + (2 * self.max_freqs ** 2)) * (self.patch_size ** 2))
+        self.latent_embedder_proj = nn.Conv2d(dim_in, inner_dim, 3, padding=1, bias=bias)
+        self.norm_latent_embedder = nn.RMSNorm(inner_dim, eps=eps, elementwise_affine=elementwise_affine)
 
     def forward(
         self,
@@ -75,8 +75,7 @@ class RaiFlowTextEmbedder(nn.Module):
         pad_token_id: int,
         base_seq_len: int,
         max_freqs: int,
-        dim: int,
-        dim_out: int,
+        inner_dim: int,
         eps: float = 1e-5,
         bias: bool = True,
         elementwise_affine: bool = True,
@@ -85,9 +84,11 @@ class RaiFlowTextEmbedder(nn.Module):
         self.embedding_dim = embedding_dim
         self.base_seq_len = base_seq_len
         self.max_freqs = max_freqs
+
+        dim_in = (4 * self.max_freqs * 2) + self.embedding_dim
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
-        self.text_embedder_proj = nn.Conv1d(dim, dim_out, 3, padding=1, bias=bias)
-        self.norm_text_embedder = nn.RMSNorm(dim_out, eps=eps, elementwise_affine=elementwise_affine)
+        self.text_embedder_proj = nn.Conv1d(dim_in, inner_dim, 3, padding=1, bias=bias)
+        self.norm_text_embedder = nn.RMSNorm(inner_dim, eps=eps, elementwise_affine=elementwise_affine)
 
     def forward(
         self,
@@ -124,16 +125,18 @@ class RaiFlowLatentUnembedder(nn.Module):
     def __init__(
         self,
         patch_size: int,
-        dim: int,
-        dim_out: int,
+        inner_dim: int,
+        out_channels: int,
         eps: float = 1e-5,
         bias: bool = True,
         elementwise_affine: bool = True,
     ):
         super().__init__()
         self.patch_size = patch_size
-        self.norm_unembed = nn.RMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
-        self.unembedder_proj = nn.Conv2d(dim, dim_out, 3, padding=1, bias=bias)
+
+        dim_out = out_channels * (self.patch_size ** 2)
+        self.norm_unembed = nn.RMSNorm(inner_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.unembedder_proj = nn.Conv2d(inner_dim, dim_out, 3, padding=1, bias=bias)
 
     def forward(
         self,

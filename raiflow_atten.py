@@ -64,12 +64,14 @@ def _get_qkv_projections(attn: "RaiFlowAttention", hidden_states: torch.FloatTen
 
 class RaiFlowAttnProcessor:
     def __call__(self, attn: "RaiFlowAttention", hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        return attn.to_out(
-            torch.mul(
-                attn.gate(hidden_states),
-                dispatch_attention_fn(*_get_qkv_projections(attn, hidden_states)).flatten(-2, -1).to(dtype=hidden_states.dtype),
+        if attn.use_headwise_gating:
+            return attn.to_out(
+                torch.mul(attn.gate(hidden_states).unsqueeze(-1), dispatch_attention_fn(*_get_qkv_projections(attn, hidden_states))).flatten(-2, -1)
             )
-        )
+        else:
+            return attn.to_out(
+                torch.mul(attn.gate(hidden_states), dispatch_attention_fn(*_get_qkv_projections(attn, hidden_states)).flatten(-2, -1))
+            )
 
 
 class RaiFlowAttention(torch.nn.Module):
@@ -84,6 +86,7 @@ class RaiFlowAttention(torch.nn.Module):
         eps: float = 1e-5,
         bias: bool = False,
         elementwise_affine: bool = False,
+        use_headwise_gating: bool = False,
         processor: Optional[RaiFlowAttnProcessor] = None,
     ):
         super().__init__()
@@ -91,6 +94,7 @@ class RaiFlowAttention(torch.nn.Module):
         self.heads = heads
         self.head_dim = head_dim
         self.inner_dim = head_dim * heads
+        self.use_headwise_gating = use_headwise_gating
 
         self.fused_projections = False
         self.out_dim = out_dim if out_dim is not None else self.query_dim
@@ -98,7 +102,7 @@ class RaiFlowAttention(torch.nn.Module):
         self.processor = processor if processor is not None else RaiFlowAttnProcessor()
 
         self.gate = nn.Sequential(
-            nn.Linear(self.query_dim, self.inner_dim, bias=bias),
+            nn.Linear(self.query_dim, self.heads if self.use_headwise_gating else self.inner_dim, bias=bias),
             nn.Sigmoid(),
             nn.Dropout(dropout),
         )
