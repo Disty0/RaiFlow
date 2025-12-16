@@ -122,6 +122,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     @register_to_config
     def __init__(
         self,
+        max_freqs: int = 8,
         sample_size: int = 64,
         in_channels: int = 384,
         num_layers: int = 16,
@@ -151,13 +152,14 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.inner_dim = self.config.num_attention_heads * self.config.attention_head_dim
         self.embedding_dim = embedding_dim or self.inner_dim
         self.base_seq_len = (self.config.sample_size // self.config.patch_size) * (self.config.sample_size // self.config.patch_size)
-        self.patched_in_channels = 4 + ((self.config.in_channels + 4) * self.config.patch_size*self.config.patch_size) # patched + pos channels
-        self.encoder_in_channels = 4 + self.embedding_dim # pos channels
+        self.patched_in_channels = (4 * self.config.max_freqs * 2) + ((self.config.in_channels + (2 * self.config.max_freqs ** 2)) * self.config.patch_size*self.config.patch_size)
+        self.encoder_in_channels = (4 * self.config.max_freqs * 2) + self.embedding_dim
 
         self.latent_embedder = RaiFlowLatentEmbedder(
             patch_size=self.config.patch_size,
             in_channels=self.config.in_channels,
             base_seq_len=self.base_seq_len,
+            max_freqs=self.config.max_freqs,
             dim=self.patched_in_channels,
             dim_out=self.inner_dim,
             eps=self.config.eps,
@@ -170,6 +172,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             embedding_dim=self.embedding_dim,
             pad_token_id=self.config.pad_token_id,
             base_seq_len=self.config.encoder_max_sequence_length,
+            max_freqs=self.config.max_freqs,
             dim=self.encoder_in_channels, # dim + pos
             dim_out=self.inner_dim,
             eps=self.config.eps,
