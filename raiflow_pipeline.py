@@ -156,7 +156,7 @@ class RaiFlowPipeline(DiffusionPipeline):
         )
 
         self.patch_size = (
-            self.transformer.config.patch_size if getattr(self, "transformer", None) is not None else 2
+            self.transformer.config.patch_size if getattr(self, "transformer", None) is not None else 1
         )
 
         if getattr(self, "image_encoder", None) is not None:
@@ -165,7 +165,7 @@ class RaiFlowPipeline(DiffusionPipeline):
             self.latent_scale_factor = 16
 
         self.default_sample_size = (
-            self.transformer.config.sample_size if getattr(self, "transformer", None) is not None else 128
+            self.transformer.config.sample_size if getattr(self, "transformer", None) is not None else 64
         )
 
     def encode_prompt(
