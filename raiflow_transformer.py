@@ -24,7 +24,7 @@ class RaiFlowFeedForward(nn.Module):
         self.ff_gate = nn.Sequential(
             nn.Linear(dim, inner_dim, bias=bias),
             nn.GELU(approximate="none"),
-            nn.Dropout(dropout),
+            nn.Dropout(dropout, inplace=True),
         )
 
         self.ff_proj = nn.Linear(dim, inner_dim, bias=bias)
