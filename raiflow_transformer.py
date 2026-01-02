@@ -286,7 +286,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         latents_seq_len = (height // self.config.patch_size) * (width // self.config.patch_size)
 
         assert hidden_states.dtype == torch.float32, "hidden_states should be in float32"
-        noisy_model_input = hidden_states
+        if not return_x0:
+            noisy_model_input = hidden_states
 
         with torch.no_grad():
             if  not scale_timesteps:
