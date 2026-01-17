@@ -21,14 +21,13 @@ class RaiFlowLatentEmbedder(nn.Module):
         self.base_seq_len = base_seq_len
         self.max_freqs = max_freqs
 
-        dim_in = (4 * self.max_freqs * 2) + ((in_channels + (2 * self.max_freqs ** 2)) * (self.patch_size ** 2))
+        dim_in = (3 * self.max_freqs * 2) + ((in_channels + (2 * self.max_freqs ** 2)) * (self.patch_size ** 2))
         self.latent_embedder_proj = nn.Conv2d(dim_in, inner_dim, 3, padding=1, bias=bias)
         self.norm_latent_embedder = nn.RMSNorm(inner_dim, eps=eps, elementwise_affine=elementwise_affine)
 
     def forward(
         self,
         hidden_states: torch.FloatTensor,
-        timestep: torch.FloatTensor,
         dtype: torch.dtype,
         latents_seq_len: int,
         encoder_seq_len: int,
@@ -53,7 +52,6 @@ class RaiFlowLatentEmbedder(nn.Module):
                     base_seq_len=self.base_seq_len,
                     max_freqs=self.max_freqs,
                     is_latent=True,
-                    timestep=timestep,
                     device=hidden_states.device,
                     dtype=torch.float32,
                 ).transpose(-1,-2).unflatten(-1, (height//self.patch_size, width//self.patch_size))
@@ -85,7 +83,7 @@ class RaiFlowTextEmbedder(nn.Module):
         self.base_seq_len = base_seq_len
         self.max_freqs = max_freqs
 
-        dim_in = (4 * self.max_freqs * 2) + self.embedding_dim
+        dim_in = (3 * self.max_freqs * 2) + self.embedding_dim
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
         self.text_embedder_proj = nn.Conv1d(dim_in, inner_dim, 3, padding=1, bias=bias)
         self.norm_text_embedder = nn.RMSNorm(inner_dim, eps=eps, elementwise_affine=elementwise_affine)
@@ -93,7 +91,6 @@ class RaiFlowTextEmbedder(nn.Module):
     def forward(
         self,
         encoder_hidden_states: torch.FloatTensor,
-        timestep: torch.FloatTensor,
         dtype: torch.dtype,
         latents_seq_len: int,
         encoder_seq_len: int,
@@ -109,7 +106,6 @@ class RaiFlowTextEmbedder(nn.Module):
                     base_seq_len=self.base_seq_len,
                     max_freqs=self.max_freqs,
                     is_latent=False,
-                    timestep=timestep,
                     device=encoder_hidden_states.device,
                     dtype=torch.float32,
                 )
@@ -151,7 +147,7 @@ class RaiFlowLatentUnembedder(nn.Module):
             return hidden_states
 
 
-def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, secondary_seq_len: int, base_seq_len: int, max_freqs: int, is_latent: bool, timestep: torch.FloatTensor, device: torch.device, dtype: torch.dtype) -> torch.FloatTensor:
+def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, secondary_seq_len: int, base_seq_len: int, max_freqs: int, is_latent: bool, device: torch.device, dtype: torch.dtype) -> torch.FloatTensor:
     global_pos = torch.linspace(start=0, end=1, steps=(seq_len + secondary_seq_len), device=device, dtype=dtype)
     if is_latent:
         global_pos = global_pos[secondary_seq_len:]
@@ -172,7 +168,6 @@ def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, secondary_seq_len: int, bas
         [
             pos_embeds,
             torch.full(shape, (seq_len / base_seq_len), device=device, dtype=dtype),
-            timestep.expand(shape)
         ],
         dim=-1,
     )

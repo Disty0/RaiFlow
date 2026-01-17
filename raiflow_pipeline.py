@@ -510,15 +510,16 @@ class RaiFlowPipeline(DiffusionPipeline):
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
 
-                noise_pred, x0_pred = self.transformer(
+                x0_pred = self.transformer(
                     hidden_states=latent_model_input,
                     encoder_hidden_states=prompt_embeds,
-                    timestep=t.expand(latent_model_input.shape[0]),
                     joint_attention_kwargs=self.joint_attention_kwargs,
-                    scale_timesteps=True,
                     return_dict=False,
-                )
-                assert noise_pred.dtype == torch.float32
+                )[0]
+
+                assert x0_pred.dtype == torch.float32 and latent_model_input.dtype == torch.float32
+                noise_pred = (latent_model_input - x0_pred)
+                noise_pred = noise_pred / (t.expand(latent_model_input.shape[0], 1, 1, 1).to(dtype=torch.float32) / self.scheduler.config.num_train_timesteps)
 
                 # perform guidances
                 if self.do_classifier_free_guidance:
@@ -553,6 +554,6 @@ class RaiFlowPipeline(DiffusionPipeline):
             image = self.image_encoder.decode(latents, return_type=output_type)
 
         if not return_dict:
-            return (image, x0_pred)
+            return (image,)
 
-        return RaiFlowPipelineOutput(images=image, x0_pred=x0_pred)
+        return RaiFlowPipelineOutput(images=image)

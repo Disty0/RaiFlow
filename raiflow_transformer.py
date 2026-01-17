@@ -101,7 +101,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         encoder_in_channels (`int`, *optional*, defaults to 1536): The number of `encoder_hidden_states` dimensions to use.
         encoder_max_sequence_length (`int`, *optional*, defaults to 1024): The sequence lenght of the text encoder embeds.
             This is fixed during training since it is used to learn a number of position embeddings.
-        num_train_timesteps (`int`, defaults to 1000): The number of diffusion steps to train the model.
         out_channels (`int`, defaults to 384): Number of output channels.
         patch_size (`int`, *optional*, (`int`, *optional*, defaults to 2):
             The size of each patch in the image. This parameter defines the resolution of patches fed into the model.
@@ -131,7 +130,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         num_refiner_layers: int = 4,
         attention_head_dim: int = 64,
         num_attention_heads: int = 24,
-        num_train_timesteps: int = 1000,
         encoder_max_sequence_length: int = 1024,
         encoder_pad_to_multiple_of: int = 256,
         vocab_size: int = 151936,
@@ -235,11 +233,8 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self,
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: torch.Tensor,
-        timestep: torch.FloatTensor,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
-        scale_timesteps: bool = True,
         return_dict: bool = True,
-        return_x0: bool = False,
     ) -> Union[RaiFlowTransformer2DModelOutput, Tuple[torch.FloatTensor]]:
         """
         The [`RaiFlowTransformer2DModel`] forward method.
@@ -249,8 +244,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 The latent input.
             encoder_hidden_states (`torch.Tensor` of shape `(batch size, sequence_len)`):
                 Input IDs from the tokenizer to use.
-            timestep (`torch.LongTensor`):
-                Used to indicate the current denoising step.
             joint_attention_kwargs (`dict`, *optional*):
                 A kwargs dictionary that if specified is passed along to the `AttentionProcessor` as defined under
                 `self.processor` in
@@ -286,24 +279,11 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         latents_seq_len = (height // self.config.patch_size) * (width // self.config.patch_size)
 
         assert hidden_states.dtype == torch.float32, "hidden_states should be in float32"
-        if not return_x0:
-            noisy_model_input = hidden_states
-
-        with torch.no_grad():
-            if  not scale_timesteps:
-                assert timestep.dtype == torch.float32, "timestep sigmas should be in float32"
-            timestep = timestep.view(batch_size, 1, 1).to(dtype=torch.float32)
-            if scale_timesteps:
-                timestep = timestep / self.config.num_train_timesteps
-            else:
-                timestep_max, timestep_min = timestep.max(), timestep.min()
-                assert timestep_max <= 1 and timestep_min >= 0, f"timesteps sigmas range should be between 1 and zero but got {timestep_max} and {timestep_min}"
 
         if use_checkpointing:
             encoder_hidden_states = self._gradient_checkpointing_func(
                 self.text_embedder,
                 encoder_hidden_states,
-                timestep,
                 dtype,
                 latents_seq_len,
                 encoder_seq_len,
@@ -312,7 +292,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         else:
             encoder_hidden_states = self.text_embedder(
                 encoder_hidden_states=encoder_hidden_states,
-                timestep=timestep,
                 dtype=dtype,
                 latents_seq_len=latents_seq_len,
                 encoder_seq_len=encoder_seq_len,
@@ -323,7 +302,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             hidden_states = self._gradient_checkpointing_func(
                 self.latent_embedder,
                 hidden_states,
-                timestep,
                 dtype,
                 latents_seq_len,
                 encoder_seq_len,
@@ -334,7 +312,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         else:
             hidden_states = self.latent_embedder(
                 hidden_states=hidden_states,
-                timestep=timestep,
                 dtype=dtype,
                 latents_seq_len=latents_seq_len,
                 encoder_seq_len=encoder_seq_len,
@@ -357,23 +334,13 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             else:
                 hidden_states = block(hidden_states=hidden_states)
 
-        x0_pred = self.unembedder(hidden_states, height=height, width=width)
-
-        if return_x0:
-            assert x0_pred.dtype == torch.float32, "model outputs and inputs should be in float32"
-            output = x0_pred
-        else:
-            # multiply your flow target and model_pred with sigmas * (torch.pi/2) to prevent training loss from exploding
-            # using x0_pred target instead of flow target for training doesn't have this issue
-            # or use return_x0 with `model_pred = noise - model_pred` instead
-            assert noisy_model_input.dtype == torch.float32 and x0_pred.dtype == torch.float32 and timestep.dtype == torch.float32, "model outputs and inputs should be in float32"
-            output = (noisy_model_input - x0_pred) / timestep.view(batch_size, 1, 1, 1)
+        output = self.unembedder(hidden_states, height=height, width=width)
 
         if USE_PEFT_BACKEND:
             # remove `lora_scale` from each PEFT layer
             unscale_lora_layers(self, lora_scale)
 
         if not return_dict:
-            return (output, x0_pred)
+            return (output,)
 
-        return RaiFlowTransformer2DModelOutput(sample=output, x0_pred=x0_pred)
+        return RaiFlowTransformer2DModelOutput(sample=output)
