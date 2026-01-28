@@ -6,32 +6,14 @@ from torch import nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import PeftAdapterMixin
 from diffusers.models.modeling_utils import ModelMixin
+from diffusers.models.attention_dispatch import dispatch_attention_fn
 from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
 
-from .raiflow_atten import RaiFlowAttention, RaiFlowAttnProcessor
 from .raiflow_embedder import RaiFlowLatentEmbedder, RaiFlowTextEmbedder, RaiFlowLatentUnembedder
 from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 fp16_max = 65504
-
-
-class RaiFlowFeedForward(nn.Module):
-    def __init__(self, dim: int, dim_out: int, ff_mult: int = 4, dropout: float = 0.1, bias: bool = False):
-        super().__init__()
-        inner_dim = int(max(dim, dim_out) * ff_mult)
-
-        self.ff_gate = nn.Sequential(
-            nn.Linear(dim, inner_dim, bias=bias),
-            nn.GELU(approximate="none"),
-            nn.Dropout(dropout),
-        )
-
-        self.ff_proj = nn.Linear(dim, inner_dim, bias=bias)
-        self.ff_out = nn.Linear(inner_dim, dim_out, bias=bias)
-
-    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
-        return self.ff_out(self.ff_proj(hidden_states) * self.ff_gate(hidden_states))
 
 
 class RaiFlowTransformerBlock(nn.Module):
@@ -42,7 +24,6 @@ class RaiFlowTransformerBlock(nn.Module):
         dim (`int`): The number of channels in the input and output.
         num_attention_heads (`int`): The number of heads to use for multi-head attention.
         attention_head_dim (`int`): The number of channels in each head.
-        ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the conv feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
         eps (`float`, *optional*, defaults to 1e-5): The eps used with nn modules.
     """
@@ -52,37 +33,52 @@ class RaiFlowTransformerBlock(nn.Module):
         dim: int,
         num_attention_heads: int,
         attention_head_dim: int,
-        ff_mult: int = 4,
         dropout: float = 0.1,
         eps: float = 1e-5,
         bias: bool = False,
         elementwise_affine: bool = False,
-        use_headwise_gating: bool = False,
     ):
         super().__init__()
+        self.heads = num_attention_heads
+        self.head_dim = attention_head_dim
+
+        self.ff_in = nn.Linear(dim, dim*12, bias=bias)
+        self.ff_out = nn.Linear(dim*5, dim, bias=bias)
+
+        self.ff_gate = nn.Sequential(nn.GELU(approximate="none"), nn.Dropout(dropout))
+        self.attn_gate = nn.Sequential(nn.Sigmoid(), nn.Dropout(dropout))
 
         self.norm = nn.RMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
-        self.ff = RaiFlowFeedForward(dim=dim, dim_out=dim, ff_mult=ff_mult, dropout=dropout, bias=bias)
-
-        self.attn = RaiFlowAttention(
-            query_dim=dim,
-            out_dim=dim,
-            out_context_dim=dim,
-            heads=num_attention_heads,
-            head_dim=attention_head_dim,
-            dropout=dropout,
-            eps=eps,
-            bias=bias,
-            elementwise_affine=elementwise_affine,
-            use_headwise_gating=use_headwise_gating,
-            processor=RaiFlowAttnProcessor(),
-        )
+        self.norm_q = nn.RMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm_k = nn.RMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         hidden_states = hidden_states.clamp(-fp16_max, fp16_max)
-        norm_hidden_states = self.norm(hidden_states)
-        hidden_states = hidden_states + self.attn(norm_hidden_states)
-        hidden_states = hidden_states + self.ff(norm_hidden_states)
+        attn_hidden_states, ff_hidden_states, ff_gate = self.ff_in(self.norm(hidden_states)).chunk(3, dim=-1)
+
+        ff_gate = self.ff_gate(ff_gate)
+        ff_hidden_states = torch.mul(ff_gate, ff_hidden_states)
+        del ff_gate
+
+        query, key, value, attn_gate = attn_hidden_states.unflatten(-1, (-1, self.head_dim)).chunk(4, dim=-2)
+        del attn_hidden_states
+
+        query = self.norm_q(query.clamp(-fp16_max, fp16_max))
+        key = self.norm_k(key.clamp(-fp16_max, fp16_max))
+        attn_hidden_states = dispatch_attention_fn(query, key, value)
+        del query, key, value
+
+        attn_gate = self.attn_gate(attn_gate)
+        attn_hidden_states = torch.mul(attn_gate, attn_hidden_states).flatten(-2, -1)
+        del attn_gate
+
+        ff_hidden_states = torch.cat([attn_hidden_states, ff_hidden_states], dim=-1)
+        del attn_hidden_states
+
+        ff_hidden_states = self.ff_out(ff_hidden_states)
+        hidden_states = hidden_states + ff_hidden_states
+        del ff_hidden_states
+
         return hidden_states
 
 
@@ -104,7 +100,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         out_channels (`int`, defaults to 384): Number of output channels.
         patch_size (`int`, *optional*, (`int`, *optional*, defaults to 2):
             The size of each patch in the image. This parameter defines the resolution of patches fed into the model.
-        ff_mult (`int`, *optional*, defaults to 4): The multiplier to use for the feed forward hidden dimension.
         dropout (`float`, *optional*, defaults to 0.1): The dropout probability to use.
         eps (`float`, *optional*, defaults to 1e-5): The eps used with nn modules.
     """
@@ -137,14 +132,12 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         embedding_dim: int = None,
         out_channels: int = None,
         patch_size: int = 1,
-        ff_mult: int = 4,
         dropout: float = 0.1,
         eps: float = 1e-5,
         bias: bool = False,
         embedder_bias: bool = True,
         elementwise_affine: bool = False,
         embedder_elementwise_affine: bool = True,
-        use_headwise_gating: bool = False,
     ):
         super().__init__()
         self.gradient_checkpointing = False
@@ -182,12 +175,10 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     dim=self.inner_dim,
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
-                    ff_mult=self.config.ff_mult,
                     dropout=self.config.dropout,
                     eps=self.config.eps,
                     bias=self.config.bias,
                     elementwise_affine=self.config.elementwise_affine,
-                    use_headwise_gating=self.config.use_headwise_gating,
                 )
                 for _ in range(self.config.num_layers)
             ]
@@ -199,12 +190,10 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                     dim=self.inner_dim,
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
-                    ff_mult=self.config.ff_mult,
                     dropout=self.config.dropout,
                     eps=self.config.eps,
                     bias=self.config.bias,
                     elementwise_affine=self.config.elementwise_affine,
-                    use_headwise_gating=self.config.use_headwise_gating,
                 )
                 for _ in range(self.config.num_refiner_layers)
             ]
@@ -218,16 +207,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             bias=self.config.embedder_bias,
             elementwise_affine=self.config.embedder_elementwise_affine,
         )
-
-    def fuse_qkv_projections(self):
-        for module in self.modules():
-            if isinstance(module, RaiFlowAttention):
-                module.fuse_projections()
-
-    def unfuse_qkv_projections(self):
-        for module in self.modules():
-            if isinstance(module, RaiFlowAttention):
-                module.unfuse_projections()
 
     def forward(
         self,
