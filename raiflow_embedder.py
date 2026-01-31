@@ -23,7 +23,6 @@ class RaiFlowLatentEmbedder(nn.Module):
 
         dim_in = (3 * self.max_freqs * 2) + ((in_channels + (2 * self.max_freqs ** 2)) * (self.patch_size ** 2))
         self.latent_embedder_proj = nn.Conv2d(dim_in, inner_dim, 3, padding=1, bias=bias)
-        self.norm_latent_embedder = nn.RMSNorm(inner_dim, eps=eps, elementwise_affine=elementwise_affine)
 
     def forward(
         self,
@@ -60,7 +59,6 @@ class RaiFlowLatentEmbedder(nn.Module):
             hidden_states = torch.nn.functional.pixel_unshuffle(hidden_states, self.patch_size)
             hidden_states = torch.cat([hidden_states, posed_latents_1d], dim=-3)
             hidden_states = self.latent_embedder_proj(hidden_states).flatten(-2,-1).transpose(-1,-2)
-            hidden_states = self.norm_latent_embedder(hidden_states.clamp(-fp16_max, fp16_max))
             hidden_states = hidden_states.to(dtype=dtype, memory_format=torch.contiguous_format)
             return hidden_states
 
@@ -86,7 +84,6 @@ class RaiFlowTextEmbedder(nn.Module):
         dim_in = (3 * self.max_freqs * 2) + self.embedding_dim
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
         self.text_embedder_proj = nn.Conv1d(dim_in, inner_dim, 3, padding=1, bias=bias)
-        self.norm_text_embedder = nn.RMSNorm(inner_dim, eps=eps, elementwise_affine=elementwise_affine)
 
     def forward(
         self,
@@ -112,7 +109,6 @@ class RaiFlowTextEmbedder(nn.Module):
 
             encoder_hidden_states = torch.cat([encoder_hidden_states.to(dtype=torch.float32), posed_encoder_1d], dim=2)
             encoder_hidden_states = self.text_embedder_proj(encoder_hidden_states.transpose(-1,-2)).transpose(-1,-2)
-            encoder_hidden_states = self.norm_text_embedder(encoder_hidden_states.clamp(-fp16_max, fp16_max))
             encoder_hidden_states = encoder_hidden_states.to(dtype=dtype, memory_format=torch.contiguous_format)
             return encoder_hidden_states
 
@@ -141,7 +137,7 @@ class RaiFlowLatentUnembedder(nn.Module):
         width: int,
     ) -> torch.FloatTensor:
         with torch.autocast(device_type=hidden_states.device.type, enabled=False): # force fp32
-            hidden_states = self.norm_unembed(hidden_states.to(dtype=torch.float32).clamp(-fp16_max, fp16_max))
+            hidden_states = self.norm_unembed(hidden_states.clamp(-fp16_max, fp16_max).to(dtype=torch.float32))
             hidden_states = hidden_states.transpose(-1,-2).unflatten(-1, (height//self.patch_size, width//self.patch_size))
             hidden_states = torch.nn.functional.pixel_shuffle(self.unembedder_proj(hidden_states), self.patch_size)
             return hidden_states
