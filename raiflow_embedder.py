@@ -154,30 +154,17 @@ def RaiFlowPosEmbed1D(batch_size: int, seq_len: int, secondary_seq_len: int, bas
     else:
         global_pos = global_pos[:seq_len]
 
-    pos_embeds = torch.stack(
-        [
-            torch.linspace(start=0, end=1, steps=seq_len, device=device, dtype=dtype),
-            global_pos,
-        ],
-        dim=-1,
-    ).unsqueeze(0).repeat(batch_size, 1, 1)
+    pos_embeds = torch.stack([torch.linspace(start=0, end=1, steps=seq_len, device=device, dtype=dtype), global_pos], dim=-1)
     del global_pos
 
-    shape = (batch_size, seq_len, 1)
-    pos_embeds = torch.cat(
-        [
-            pos_embeds,
-            torch.full(shape, (seq_len / base_seq_len), device=device, dtype=dtype),
-        ],
-        dim=-1,
-    )
-
     # batch_size, seq_len, channels, dct
+    pos_embeds = torch.cat([pos_embeds, torch.full((seq_len, 1), (seq_len / base_seq_len), device=device, dtype=dtype)], dim=-1)
     pos_embeds = torch.pi * pos_embeds.unsqueeze(-1) * (2 ** torch.linspace(0, max_freqs - 1, max_freqs, device=device, dtype=dtype))
     pos_embeds = pos_embeds.flatten(-2,-1)
 
     # batch_size, seq_len, (channels * max_freqs * 2)
     pos_embeds = torch.cat([torch.sin(pos_embeds), torch.cos(pos_embeds)], dim=-1)
+    pos_embeds = pos_embeds.unsqueeze(0).repeat(batch_size, 1, 1)
     return pos_embeds
 
 
