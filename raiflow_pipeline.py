@@ -3,19 +3,15 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from diffusers.image_processor import PipelineImageInput
+from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
-from diffusers.utils import (
-    is_torch_xla_available,
-    logging,
-    replace_example_docstring,
-)
+from diffusers.utils import is_torch_xla_available, logging, replace_example_docstring
 
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
+from diffusers import AutoencoderKLFlux2
 from transformers import Qwen2Tokenizer
-from .raiflow_image_encoder import RaiFlowImageEncoder
 
 from .raiflow_transformer import RaiFlowTransformer2DModel
 from .raiflow_pipeline_output import RaiFlowPipelineOutput
@@ -131,8 +127,8 @@ class RaiFlowPipeline(DiffusionPipeline):
         tokenizer (`Qwen2Tokenizer`):
             Tokenizer of class
             [Qwen2Tokenizer](https://huggingface.co/docs/transformers/main/model_doc/qwen2#transformers.Qwen2Tokenizer).
-        image_encoder ([`RaiFlowImageEncoder`], *optional*):
-            RaiFlow JPEG encoder to encode and decode images to and from latent representations.
+        vae ([`AutoencoderKLFlux2`]):
+            Variational Auto-Encoder (VAE) Model to encode and decode images to and from latent representations.
     """
 
     model_cpu_offload_seq = "transformer"
@@ -144,7 +140,7 @@ class RaiFlowPipeline(DiffusionPipeline):
         transformer: RaiFlowTransformer2DModel,
         scheduler: FlowMatchEulerDiscreteScheduler,
         tokenizer: Qwen2Tokenizer,
-        image_encoder: RaiFlowImageEncoder,
+        vae: AutoencoderKLFlux2,
     ):
         super().__init__()
 
@@ -152,21 +148,20 @@ class RaiFlowPipeline(DiffusionPipeline):
             transformer=transformer,
             scheduler=scheduler,
             tokenizer=tokenizer,
-            image_encoder=image_encoder,
+            vae=vae,
         )
 
         self.patch_size = (
             self.transformer.config.patch_size if getattr(self, "transformer", None) is not None else 1
         )
 
-        if getattr(self, "image_encoder", None) is not None:
-            self.latent_scale_factor = self.image_encoder.config.block_size
+        if getattr(self, "vae", None) is not None:
+            self.latent_scale_factor = 2 * (2 ** (len(self.vae.config.block_out_channels) - 1))
         else:
             self.latent_scale_factor = 16
 
-        self.default_sample_size = (
-            self.transformer.config.sample_size if getattr(self, "transformer", None) is not None else 64
-        )
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.latent_scale_factor)
+        self.default_sample_size = self.transformer.config.sample_size if getattr(self, "transformer", None) is not None else 64
 
     def encode_prompt(
         self,
@@ -443,7 +438,7 @@ class RaiFlowPipeline(DiffusionPipeline):
 
         device = self._execution_device
         dtype = self.transformer.text_embedder.token_embedding.weight.dtype # pipe can be quantized
-        latents_dtype = torch.float32 # DCT space needs high precision
+        latents_dtype = torch.float32
 
         prompt_embeds = self.encode_prompt(
             prompt=prompt,
@@ -551,7 +546,12 @@ class RaiFlowPipeline(DiffusionPipeline):
         if output_type == "latent":
             image = latents
         else:
-            image = self.image_encoder.decode(latents, return_type=output_type)
+            latents_bn_mean = self.vae.bn.running_mean.view(1, -1, 1, 1).to(device, dtype=torch.float32)
+            latents_bn_std = self.vae.bn.running_var.view(1, -1, 1, 1).to(device, dtype=torch.float32).add(self.vae.config.batch_norm_eps).sqrt()
+            latents = torch.addcmul(latents_bn_mean, latents.to(dtype=torch.float32), latents_bn_std).to(dtype=self.vae.dtype)
+            latents = torch.nn.functional.pixel_shuffle(latents, 2)
+            image = self.vae.decode(latents).sample
+            image = self.image_processor.postprocess(image, output_type=output_type)
 
         if not return_dict:
             return (image,)

@@ -57,7 +57,7 @@ class RaiFlowTransformerBlock(nn.Module):
         attn_hidden_states, ff_hidden_states, ff_gate = self.ff_in(self.norm(hidden_states)).chunk(3, dim=-1)
 
         ff_gate = self.ff_gate(ff_gate)
-        ff_hidden_states = torch.mul(ff_gate, ff_hidden_states)
+        ff_hidden_states = torch.mul(ff_gate, ff_hidden_states).contiguous()
         del ff_gate
 
         query, key, value, attn_gate = attn_hidden_states.unflatten(-1, (-1, self.head_dim)).chunk(4, dim=-2)
@@ -69,7 +69,7 @@ class RaiFlowTransformerBlock(nn.Module):
         del query, key, value
 
         attn_gate = self.attn_gate(attn_gate)
-        attn_hidden_states = torch.mul(attn_gate, attn_hidden_states).flatten(-2, -1)
+        attn_hidden_states = torch.mul(attn_gate, attn_hidden_states).flatten(-2, -1).contiguous()
         del attn_gate
 
         ff_hidden_states = torch.cat([attn_hidden_states, ff_hidden_states], dim=-1)
@@ -300,17 +300,19 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             )
 
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=-2)
-        for index_block, block in enumerate(self.transformer_blocks):
-            if use_checkpointing:
+        if use_checkpointing:
+            for index_block, block in enumerate(self.transformer_blocks):
                 hidden_states = self._gradient_checkpointing_func(block, hidden_states)
-            else:
+        else:
+            for index_block, block in enumerate(self.transformer_blocks):
                 hidden_states = block(hidden_states=hidden_states)
         hidden_states = hidden_states[:, encoder_seq_len :]
 
-        for index_block, block in enumerate(self.refiner_transformer_blocks):
-            if use_checkpointing:
+        if use_checkpointing:
+            for index_block, block in enumerate(self.refiner_transformer_blocks):
                 hidden_states = self._gradient_checkpointing_func(block, hidden_states)
-            else:
+        else:
+            for index_block, block in enumerate(self.refiner_transformer_blocks):
                 hidden_states = block(hidden_states=hidden_states)
 
         output = self.unembedder(hidden_states, height=height, width=width)
