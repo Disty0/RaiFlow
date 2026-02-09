@@ -83,7 +83,7 @@ class RaiFlowTextEmbedder(nn.Module):
 
         dim_in = (3 * self.max_freqs * 2) + self.embedding_dim
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim, pad_token_id)
-        self.text_embedder_proj = nn.Linear(dim_in, inner_dim, bias=bias)
+        self.text_embedder_proj = nn.Conv1d(dim_in, inner_dim, 3, padding=1, bias=bias)
 
     def forward(
         self,
@@ -108,7 +108,8 @@ class RaiFlowTextEmbedder(nn.Module):
                 )
 
             encoder_hidden_states = torch.cat([encoder_hidden_states.to(dtype=torch.float32), posed_encoder_1d], dim=2)
-            encoder_hidden_states = self.text_embedder_proj(encoder_hidden_states).to(dtype=dtype)
+            encoder_hidden_states = self.text_embedder_proj(encoder_hidden_states.transpose(-1,-2)).transpose(-1,-2)
+            encoder_hidden_states = encoder_hidden_states.to(dtype=dtype, memory_format=torch.contiguous_format)
             return encoder_hidden_states
 
 

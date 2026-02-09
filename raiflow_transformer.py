@@ -257,8 +257,6 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         _, encoder_seq_len = encoder_hidden_states.shape
         latents_seq_len = (height // self.config.patch_size) * (width // self.config.patch_size)
 
-        assert hidden_states.dtype == torch.float32, "hidden_states should be in float32"
-
         if use_checkpointing:
             encoder_hidden_states = self._gradient_checkpointing_func(
                 self.text_embedder,
