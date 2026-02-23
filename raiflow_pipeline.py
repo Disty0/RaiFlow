@@ -1,11 +1,14 @@
 import inspect
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
+import numpy as np
+import PIL.Image
 
 from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
-from diffusers.utils import is_torch_xla_available, logging, replace_example_docstring
+from diffusers.utils import BaseOutput, is_torch_xla_available, logging, replace_example_docstring
 
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
@@ -14,12 +17,9 @@ from diffusers import AutoencoderKLFlux2
 from transformers import Qwen2Tokenizer
 
 from .raiflow_transformer import RaiFlowTransformer2DModel
-from .raiflow_pipeline_output import RaiFlowPipelineOutput
-
 
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
-
     XLA_AVAILABLE = True
 else:
     XLA_AVAILABLE = False
@@ -115,6 +115,20 @@ def retrieve_timesteps(
         scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
         timesteps = scheduler.timesteps
     return timesteps, num_inference_steps
+
+
+@dataclass
+class RaiFlowPipelineOutput(BaseOutput):
+    """
+    Output class for RaiFlow pipelines.
+
+    Args:
+        images (`List[PIL.Image.Image]` or `np.ndarray`)
+            List of denoised PIL images of length `batch_size` or numpy array of shape `(batch_size, height, width, num_channels)`.
+            PIL images or numpy array present the denoised images of the diffusion pipeline.
+    """
+
+    images: Union[List[PIL.Image.Image], np.ndarray]  # noqa: F821
 
 
 class RaiFlowPipeline(DiffusionPipeline):

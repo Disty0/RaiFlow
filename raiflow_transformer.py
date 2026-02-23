@@ -3,13 +3,15 @@ from typing import Any, Dict, Optional, Tuple, Union
 import torch
 from torch import nn
 
-from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.loaders import PeftAdapterMixin
-from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.attention_dispatch import dispatch_attention_fn
 from diffusers.utils import USE_PEFT_BACKEND, logging, scale_lora_layers, unscale_lora_layers
+from diffusers.configuration_utils import ConfigMixin, register_to_config
 
-from .raiflow_pipeline_output import RaiFlowTransformer2DModelOutput
+from diffusers.models.attention import AttentionMixin, AttentionModuleMixin
+from diffusers.models.attention_dispatch import dispatch_attention_fn
+from diffusers.models.modeling_outputs import Transformer2DModelOutput
+from diffusers.models.modeling_utils import ModelMixin
+from diffusers.models.cache_utils import CacheMixin
+from diffusers.loaders import PeftAdapterMixin
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 fp16_max = 65504
@@ -74,9 +76,7 @@ class RaiFlowLatentEmbedder(nn.Module):
         base_seq_len: int,
         max_freqs: int,
         inner_dim: int,
-        eps: float = 1e-5,
         bias: bool = True,
-        elementwise_affine: bool = True,
     ):
         super().__init__()
         self.patch_size = patch_size
@@ -134,9 +134,7 @@ class RaiFlowTextEmbedder(nn.Module):
         base_seq_len: int,
         max_freqs: int,
         inner_dim: int,
-        eps: float = 1e-5,
         bias: bool = True,
-        elementwise_affine: bool = True,
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
@@ -206,9 +204,90 @@ class RaiFlowLatentUnembedder(nn.Module):
             return hidden_states
 
 
+class RaiFlowAttnProcessor:
+    _attention_backend = None
+    _parallel_config = None
+
+    def __call__(self, attn: "RaiFlowAttention", hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        query, key, value, attn_gate = attn.attn_in(hidden_states).unflatten(-1, (-1, attn.head_dim)).chunk(4, dim=-2)
+        query = attn.norm_q(query.clamp(-fp16_max, fp16_max))
+        key = attn.norm_k(key.clamp(-fp16_max, fp16_max))
+
+        hidden_states = dispatch_attention_fn(query, key, value)
+        del query, key, value
+
+        attn_gate = attn.attn_gate(attn_gate)
+        hidden_states = torch.mul(attn_gate, hidden_states).flatten(-2, -1).contiguous()
+        del attn_gate
+
+        hidden_states = attn.attn_out(hidden_states)
+        return hidden_states
+
+
+class RaiFlowAttention(torch.nn.Module, AttentionModuleMixin):
+    _default_processor_cls = RaiFlowAttnProcessor
+    _available_processors = [RaiFlowAttnProcessor]
+    _supports_qkv_fusion = False
+
+    def __init__(
+        self,
+        num_heads: int,
+        head_dim: int,
+        input_dim: int = None,
+        output_dim: int = None,
+        dropout: float = 0.1,
+        eps: float = 1e-5,
+        bias: bool = False,
+        elementwise_affine: bool = False,
+        processor: RaiFlowAttnProcessor = None,
+    ):
+        super().__init__()
+        self.head_dim = head_dim
+        self.num_heads = num_heads
+        self.inner_dim = self.head_dim * self.num_heads
+        self.input_dim = input_dim if input_dim is not None else self.inner_dim
+        self.output_dim = output_dim if output_dim is not None else self.input_dim
+
+        self.attn_in = nn.Linear(self.input_dim, self.inner_dim*4, bias=bias)
+        self.attn_out = nn.Linear(self.inner_dim, self.output_dim, bias=bias)
+        self.attn_gate = nn.Sequential(nn.Sigmoid(), nn.Dropout(dropout))
+
+        self.norm_q = nn.RMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm_k = nn.RMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
+
+        if processor is None:
+            processor = self._default_processor_cls()
+        self.set_processor(processor)
+
+    def forward(self, hidden_states: torch.FloatTensor, **kwargs) -> torch.FloatTensor:
+        return self.processor(self, hidden_states, **kwargs)
+
+
+class RaiFlowFeedForward(nn.Module):
+    def __init__(self, input_dim: int, output_dim: int = None, inner_dim: int = None, ff_mult: int = 4, dropout: float = 0.1, bias: bool = False):
+        super().__init__()
+        self.ff_mult = ff_mult
+        self.input_dim = input_dim
+        self.output_dim = output_dim if output_dim is not None else input_dim
+        self.inner_dim = (inner_dim if inner_dim is not None else self.input_dim) * self.ff_mult
+
+        self.ff_in = nn.Linear(self.input_dim, self.inner_dim*2, bias=bias)
+        self.ff_out = nn.Linear(self.inner_dim, self.output_dim, bias=bias)
+        self.ff_gate = nn.Sequential(nn.GELU(approximate="none"), nn.Dropout(dropout))
+
+    def forward(self, hidden_states):
+        hidden_states, ff_gate = self.ff_in(hidden_states).chunk(2, dim=-1)
+        ff_gate = self.ff_gate(ff_gate)
+        hidden_states = torch.mul(ff_gate, hidden_states).contiguous()
+        del ff_gate
+
+        hidden_states = self.ff_out(hidden_states)
+        return hidden_states
+
+
 class RaiFlowTransformerBlock(nn.Module):
     r"""
-    A Transformer block as part of the RaiFlow DiT architecture.
+    A Transformer block as part of the RaiFlow architecture.
 
     Parameters:
         dim (`int`): The number of channels in the input and output.
@@ -220,59 +299,32 @@ class RaiFlowTransformerBlock(nn.Module):
 
     def __init__(
         self,
-        dim: int,
         num_attention_heads: int,
         attention_head_dim: int,
+        inner_dim: int = None,
+        ff_mult: int = 4,
         dropout: float = 0.1,
         eps: float = 1e-5,
         bias: bool = False,
         elementwise_affine: bool = False,
     ):
         super().__init__()
-        self.heads = num_attention_heads
-        self.head_dim = attention_head_dim
+        self.inner_dim = inner_dim if inner_dim is not None else (num_attention_heads * attention_head_dim)
 
-        self.ff_in = nn.Linear(dim, dim*12, bias=bias)
-        self.ff_out = nn.Linear(dim*5, dim, bias=bias)
+        self.ff = RaiFlowFeedForward(self.inner_dim, ff_mult=ff_mult, dropout=dropout, bias=bias)
+        self.attn = RaiFlowAttention(num_attention_heads, attention_head_dim, input_dim=inner_dim, dropout=dropout, eps=eps, bias=bias, elementwise_affine=elementwise_affine)
 
-        self.ff_gate = nn.Sequential(nn.GELU(approximate="none"), nn.Dropout(dropout))
-        self.attn_gate = nn.Sequential(nn.Sigmoid(), nn.Dropout(dropout))
-
-        self.norm = nn.RMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
-        self.norm_q = nn.RMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
-        self.norm_k = nn.RMSNorm(self.head_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm_ff = nn.RMSNorm(self.inner_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm_attn = nn.RMSNorm(self.inner_dim, eps=eps, elementwise_affine=elementwise_affine)
 
     def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
         hidden_states = hidden_states.clamp(-fp16_max, fp16_max)
-        attn_hidden_states, ff_hidden_states, ff_gate = self.ff_in(self.norm(hidden_states)).chunk(3, dim=-1)
-
-        ff_gate = self.ff_gate(ff_gate)
-        ff_hidden_states = torch.mul(ff_gate, ff_hidden_states).contiguous()
-        del ff_gate
-
-        query, key, value, attn_gate = attn_hidden_states.unflatten(-1, (-1, self.head_dim)).chunk(4, dim=-2)
-        del attn_hidden_states
-
-        query = self.norm_q(query.clamp(-fp16_max, fp16_max))
-        key = self.norm_k(key.clamp(-fp16_max, fp16_max))
-        attn_hidden_states = dispatch_attention_fn(query, key, value)
-        del query, key, value
-
-        attn_gate = self.attn_gate(attn_gate)
-        attn_hidden_states = torch.mul(attn_gate, attn_hidden_states).flatten(-2, -1).contiguous()
-        del attn_gate
-
-        ff_hidden_states = torch.cat([attn_hidden_states, ff_hidden_states], dim=-1)
-        del attn_hidden_states
-
-        ff_hidden_states = self.ff_out(ff_hidden_states)
-        hidden_states = hidden_states + ff_hidden_states
-        del ff_hidden_states
-
+        hidden_states = hidden_states + self.attn(self.norm_attn(hidden_states))
+        hidden_states = hidden_states + self.ff(self.norm_ff(hidden_states))
         return hidden_states
 
 
-class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
+class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, CacheMixin, AttentionMixin):
     """
     The Multi Modal Convoluted Transformer model introduced in RaiFlow.
 
@@ -297,13 +349,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
     _supports_gradient_checkpointing = True
     _skip_layerwise_casting_patterns = [
         "latent_embedder", "unembedder", "text_embedder", "token_embedding",
-        "norm_latent_embedder", "norm_text_embedder", "norm_unembed",
-        "norm_ff", "norm_attn", "norm_q", "norm_k", "norm", "bias",
+        "norm_unembed", "norm_ff", "norm_attn", "norm_q", "norm_k", "norm", "bias",
     ]
-    _keep_in_fp32_modules = [
-        "latent_embedder", "unembedder", "text_embedder_proj",
-        "norm_latent_embedder", "norm_text_embedder", "norm_unembed",
-    ]
+    _keep_in_fp32_modules = ["latent_embedder", "unembedder", "text_embedder_proj", "norm_unembed"]
 
     @register_to_config
     def __init__(
@@ -321,12 +369,13 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         pad_token_id: int = 151643,
         embedding_dim: int = None,
         out_channels: int = None,
+        ff_mult: int = 4,
         patch_size: int = 1,
         dropout: float = 0.1,
         eps: float = 1e-5,
-        bias: bool = False,
+        bias: bool = True,
         embedder_bias: bool = True,
-        elementwise_affine: bool = False,
+        elementwise_affine: bool = True,
         embedder_elementwise_affine: bool = True,
     ):
         super().__init__()
@@ -342,9 +391,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.base_seq_len,
             max_freqs=self.config.max_freqs,
             inner_dim=self.inner_dim,
-            eps=self.config.eps,
             bias=self.config.embedder_bias,
-            elementwise_affine=self.config.embedder_elementwise_affine,
         )
 
         self.text_embedder = RaiFlowTextEmbedder(
@@ -354,17 +401,15 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
             base_seq_len=self.config.encoder_max_sequence_length,
             max_freqs=self.config.max_freqs,
             inner_dim=self.inner_dim,
-            eps=self.config.eps,
             bias=self.config.embedder_bias,
-            elementwise_affine=self.config.embedder_elementwise_affine,
         )
 
         self.transformer_blocks = nn.ModuleList(
             [
                 RaiFlowTransformerBlock(
-                    dim=self.inner_dim,
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
+                    ff_mult=self.config.ff_mult,
                     dropout=self.config.dropout,
                     eps=self.config.eps,
                     bias=self.config.bias,
@@ -377,9 +422,9 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         self.refiner_transformer_blocks = nn.ModuleList(
             [
                 RaiFlowTransformerBlock(
-                    dim=self.inner_dim,
                     num_attention_heads=self.config.num_attention_heads,
                     attention_head_dim=self.config.attention_head_dim,
+                    ff_mult=self.config.ff_mult,
                     dropout=self.config.dropout,
                     eps=self.config.eps,
                     bias=self.config.bias,
@@ -404,7 +449,7 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         encoder_hidden_states: torch.Tensor,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
-    ) -> Union[RaiFlowTransformer2DModelOutput, Tuple[torch.FloatTensor]]:
+    ) -> Union[Transformer2DModelOutput, Tuple[torch.FloatTensor]]:
         """
         The [`RaiFlowTransformer2DModel`] forward method.
 
@@ -418,11 +463,11 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
                 `self.processor` in
                 [diffusers.models.attention_processor](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py).
             return_dict (`bool`, *optional*, defaults to `True`):
-                Whether or not to return a [`RaiFlowTransformer2DModelOutput`] instead of a plain
+                Whether or not to return a [`Transformer2DModelOutput`] instead of a plain
                 tuple.
 
         Returns:
-            If `return_dict` is True, an [`RaiFlowTransformer2DModelOutput`] is returned, otherwise a
+            If `return_dict` is True, an [`Transformer2DModelOutput`] is returned, otherwise a
             `tuple` where the first element is the sample tensor.
         """
         if joint_attention_kwargs is not None:
@@ -512,4 +557,4 @@ class RaiFlowTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin):
         if not return_dict:
             return (output,)
 
-        return RaiFlowTransformer2DModelOutput(sample=output)
+        return Transformer2DModelOutput(sample=output)
